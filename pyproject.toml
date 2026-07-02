@@ -1,0 +1,48 @@
+[project]
+name = "autograph-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "docling>=2.107.0",
+    "faiss-cpu>=1.14.3",
+    "llama-index-core>=0.14.23",
+    "markitdown>=0.1.6",
+    "nltk>=3.9.4",
+    "numpy>=2.5.0",
+    "openai>=2.44.0",
+    "pydantic>=2.13.4",
+    "rank-bm25>=0.2.2",
+    "requests>=2.34.2",
+    "sentence-transformers>=5.6.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.18,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # line too long — gestito da line-length
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**" = ["S101"]  # assert è ok nei test
