@@ -1,10 +1,28 @@
 from __future__ import annotations
 
-from autograph_rag.types import ScoredChunk
+from abc import ABC, abstractmethod
+
+from autograph_rag.types import Message, ScoredChunk
+
+DEFAULT_SYSTEM_PROMPT = (
+    "Answer the user's question based solely on the information in the provided context. "
+    "If the context is insufficient, say so."
+)
 
 
-class PromptGenerator:
-    """Builds structured prompts from query, context chunks, and system instructions."""
+class BaseAugmenter(ABC):
+    """Assembles the prompt from system instructions, query, and retrieved context."""
+
+    @abstractmethod
+    def build(self, query: str, context: str | list[ScoredChunk]) -> list[Message]:
+        pass
+
+
+class PromptAugmenter(BaseAugmenter):
+    """Builds structured prompts from query, context chunks, and injected system instructions."""
+
+    def __init__(self, system: str | None = None) -> None:
+        self.system = system if system is not None else DEFAULT_SYSTEM_PROMPT
 
     def _join_context_sources(self, scored_chunks: list[ScoredChunk]) -> str:
         enriched_context = []
@@ -35,7 +53,8 @@ class PromptGenerator:
         user_prompt = f"{query_prompt}\n{context_prompt}\n"
         return f"\n{user_prompt.strip()}\n"
 
-    def build_prompt(self, system: str, query: str, context: str | list[ScoredChunk]) -> str:
-        system_prompt = self.build_system_prompt(system)
-        user_prompt = self.build_user_prompt(query, context)
-        return f"{system_prompt}\n{user_prompt}"
+    def build(self, query: str, context: str | list[ScoredChunk]) -> list[Message]:
+        return [
+            Message(role="system", content=self.build_system_prompt(self.system)),
+            Message(role="user", content=self.build_user_prompt(query, context)),
+        ]

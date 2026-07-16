@@ -1,90 +1,135 @@
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Iterator
 from datetime import date
 from pathlib import Path
 
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types.doc import ContentLayer
-from markitdown import MarkItDown
+import requests
 
-from autograph_rag.types import Document, Source, content_hash
+from autograph_rag.ingestion.converter import BaseConverter, MarkdownConverter
+from autograph_rag.types import Document, RemoteDocument, Source, content_hash
+
+logger = logging.getLogger(__name__)
 
 
 class BaseLoader(ABC):
-    """Reads raw files from disk and returns a list of Documents."""
+    """Port for anything that produces Documents, regardless of the source."""
 
-    def __init__(self, input_dir: Path, output_dir: Path) -> None:
+    @abstractmethod
+    def load(self) -> Iterator[Document]:
+        """Yields the documents to feed into the ingestion pipeline, one at a time."""
+
+
+class LocalLoader(BaseLoader):
+    """Base for loaders that read Documents from data on the local machine."""
+
+    def __init__(self, converter: BaseConverter | None = None) -> None:
+        self.converter = converter or MarkdownConverter()
+
+
+class FileSystemLoader(LocalLoader):
+    """Loads raw files from a directory, converting each to markdown by media type."""
+
+    def __init__(
+        self,
+        input_dir: Path,
+        output_dir: Path,
+        converter: BaseConverter | None = None,
+        save_output: bool = False,
+    ) -> None:
+        super().__init__(converter)
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
+        self.save_output = save_output
         self._validate_paths()
 
     def _validate_paths(self) -> None:
         if not self.input_dir.exists():
-            raise FileNotFoundError(f"Input directory non trovato: {self.input_dir}")
+            raise FileNotFoundError(f"Input directory not found: {self.input_dir}")
         if not self.input_dir.is_dir():
-            raise NotADirectoryError(f"Input path non è una directory: {self.input_dir}")
+            raise NotADirectoryError(f"Input path is not a directory: {self.input_dir}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    @abstractmethod
-    def _convert(self, path: Path) -> str:
-        """Converts a single file to plain text or markdown."""
-
-    def load_documents(self, save_output: bool = False) -> list[Document]:
-        docs: list[Document] = []
-        for file_name in os.listdir(self.input_dir):
+    def load(self) -> Iterator[Document]:
+        for file_name in sorted(os.listdir(self.input_dir)):
             path = self.input_dir / file_name
             if not path.is_file():
                 continue
-            text = self._convert(path)
-            source = Source(id=content_hash(text), name=file_name, time=date.today())
-            docs.append(Document(text=text, source=source))
-            if save_output:
+            try:
+                text = self.converter.convert_file(path)
+            except Exception:
+                logger.warning("Skipping file that could not be converted: %s", file_name, exc_info=True)
+                continue
+            if self.save_output:
                 self._save_output(file_name, text)
-        return docs
+            yield Document(
+                text=text,
+                source=Source(id=content_hash(text), name=file_name, time=date.today()),
+            )
 
     def _save_output(self, filename: str, text: str) -> None:
         output_path = self.output_dir / f"{filename}.md"
         output_path.write_text(text, encoding="utf-8")
 
 
-class DoclingLoader(BaseLoader):
-    """Converts documents to markdown using Docling (PDF, DOCX, PPTX, XLSX, HTML, images)."""
+class RemoteLoader(BaseLoader):
+    """Base for loaders that pull Documents from an external service."""
+
+    def __init__(self, converter: BaseConverter | None = None) -> None:
+        self.converter = converter or MarkdownConverter()
+
+    def load(self) -> Iterator[Document]:
+        for record in self._fetch():
+            try:
+                item = RemoteDocument.model_validate(record)
+                document = self._to_document(item)
+            except Exception:
+                logger.warning("Skipping remote record that could not be processed", exc_info=True)
+                continue
+            yield document
+
+    @abstractmethod
+    def _fetch(self) -> Iterable[dict]:
+        """Fetches the raw records from the remote service (transport lives here)."""
+
+    def _to_document(self, item: RemoteDocument) -> Document:
+        """The mapping is the contract between an external service and the RAG types."""
+        text = self.converter.convert_stream(item.data, item.media_type, name=item.title)
+        return Document(
+            text=text,
+            source=Source(id=item.external_id, name=item.title, time=item.ingested_at),
+        )
+
+
+class ApiLoader(RemoteLoader):
+    """RemoteLoader that fetches documents from an HTTP JSON API.
+
+    Owns the call: endpoint, auth headers, timeout. The response is expected to be
+    a JSON list of records, or an object with an ``items`` list. Pagination, retries
+    and auth refresh would be added here (``_fetch`` may yield across pages), without
+    touching the contract or the mapping.
+    """
 
     def __init__(
         self,
-        input_dir: Path,
-        output_dir: Path,
-        do_table: bool = True,
-        do_ocr: bool = False,
-
+        base_url: str,
+        path: str = "/documents",
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
+        converter: BaseConverter | None = None,
     ) -> None:
-        super().__init__(input_dir, output_dir)
-        pdf_options = PdfPipelineOptions()
-        pdf_options.do_table_structure = do_table
-        pdf_options.do_ocr = do_ocr
-        self.converter = DocumentConverter(
-            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
-        )
+        super().__init__(converter)
+        self.base_url = base_url.rstrip("/")
+        self.path = path
+        self.timeout = timeout
+        self.headers = headers or {}
 
-    def _convert(self, path: Path) -> str:
-        result = self.converter.convert(str(path))
-        return result.document.export_to_markdown(
-            included_content_layers={ContentLayer.BODY}
-        )
-
-
-class MarkItDownLoader(BaseLoader):
-    """Converts structured data formats (CSV, JSON, Excel, HTML, DOCX, …) to markdown using MarkItDown."""
-
-    def __init__(self, input_dir: Path, output_dir: Path) -> None:
-        super().__init__(input_dir, output_dir)
-        self.converter = MarkItDown()
-
-    def _convert(self, path: Path) -> str:
-        path = str(path)
-        converted = self.converter.convert(path)
-        return converted.text_content
+    def _fetch(self) -> Iterable[dict]:
+        url = f"{self.base_url}{self.path}"
+        response = requests.get(url, headers=self.headers, timeout=self.timeout)
+        response.raise_for_status()
+        payload = response.json()
+        return payload["items"] if isinstance(payload, dict) else payload

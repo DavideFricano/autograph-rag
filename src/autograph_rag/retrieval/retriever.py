@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from autograph_rag.types import Chunk, ScoredChunk
+from autograph_rag.types import ScoredChunk
 
 
 class BaseRetriever(ABC):
-    """Base class for all retrieval strategies."""
-
-    def __init__(self, chunks: list[Chunk], **kwargs) -> None:
-        self.chunks = chunks
+    """Base interface for all retrieval strategies."""
 
     @abstractmethod
     def retrieve(self, query: str, top_k: int) -> list[ScoredChunk]:

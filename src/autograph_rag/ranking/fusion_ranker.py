@@ -13,14 +13,8 @@ class FusionRanker(BaseRanker, ABC):
 
     @abstractmethod
     def fuse(self, scores: np.ndarray) -> np.ndarray:
-        """Reduces a (n_chunks, n_retrievers) score matrix to a (n_chunks,) fused score."""
+        """Reduces a (n_chunks, n_retrievers) score matrix to a (n_chunks) fused score."""
         pass
-
-    def rank(self, results: list[list[ScoredChunk]], top_k: int | None = None) -> list[ScoredChunk]:
-        chunks, scores = self._align(results)
-        fused = self.fuse(scores)
-        scored = [ScoredChunk(chunk=c, score=float(s)) for c, s in zip(chunks, fused, strict=False)]
-        return self.extract_top_k(scored, top_k)
 
     def _align(self, results: list[list[ScoredChunk]]) -> tuple[list[Chunk], np.ndarray]:
         """Builds a (n_chunks, n_retrievers) score matrix, filling 0 for missing pairs."""
@@ -29,27 +23,40 @@ class FusionRanker(BaseRanker, ABC):
             for sc in result:
                 if sc.chunk.id not in seen:
                     seen[sc.chunk.id] = sc.chunk
-
         chunks = list(seen.values())
         chunk_idx = {chunk_id: i for i, chunk_id in enumerate(seen)}
-
         scores = np.zeros((len(chunks), len(results)))
         for col, result in enumerate(results):
             for sc in result:
                 scores[chunk_idx[sc.chunk.id], col] = sc.score
-
         return chunks, scores
 
+    def rank(self, results: list[list[ScoredChunk]], top_k: int | None = None) -> list[ScoredChunk]:
+        chunks, scores = self._align(results)
+        fused = self.fuse(scores)
+        scored = [ScoredChunk(chunk=c, score=float(s)) for c, s in zip(chunks, fused, strict=True)]
+        return self.extract_top_k(scored, top_k)
+    
 
 class RelativeFusionRanker(FusionRanker):
-    """Relative Score Fusion (RSF)."""
+    """Relative Score Fusion (RSF).
+
+    Min-max normalizes each retriever's scores to [0, 1] before the weighted
+    combination, so retrievers with different score scales (e.g. bounded
+    cosine similarity vs. unbounded BM25) contribute comparably.
+    """
 
     def __init__(self, weights: np.ndarray) -> None:
-        self.weight = np.array(weights)
+        self.weights = np.asarray(weights, dtype=float)
 
     def fuse(self, scores: np.ndarray) -> np.ndarray:
-        dim = min(scores.shape[1], len(self.weight))
-        return scores[:, :dim] @ self.weight[:dim]
+        if scores.shape[1] != len(self.weights):
+            raise ValueError(f"Number of weights ({len(self.weights)}) does not match number of retrievers ({scores.shape[1]})")
+        col_min = scores.min(axis=0, keepdims=True)
+        col_max = scores.max(axis=0, keepdims=True)
+        span = np.where(col_max == col_min, 1.0, col_max - col_min)
+        scores = (scores - col_min) / span
+        return scores @ self.weights
 
 
 class ReciprocalFusionRanker(FusionRanker):

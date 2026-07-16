@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from abc import abstractmethod
 
+import nltk
 import numpy as np
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
@@ -16,7 +17,7 @@ class LexicalRetriever(BaseRetriever):
     """Retriever based on lexical matching."""
 
     def __init__(self, chunks: list[Chunk]) -> None:
-        super().__init__(chunks)
+        self.chunks = chunks
 
     @abstractmethod
     def retrieve(self, query: str, top_k: int) -> list[ScoredChunk]:
@@ -26,9 +27,10 @@ class LexicalRetriever(BaseRetriever):
 class BM25Retriever(LexicalRetriever):
     """BM25Okapi retriever with language-aware stemming and stopword removal."""
 
-    def __init__(self, chunks: list[Chunk], language: str = "italian") -> None:
+    def __init__(self, chunks: list[Chunk], language: str = "english") -> None:
         super().__init__(chunks)
         self.language = language.lower()
+        nltk.download("stopwords", quiet=True)
         self.stemmer = SnowballStemmer(self.language)
         self.stopwords = set(stopwords.words(self.language))
         self.bm25 = BM25Okapi(self._tokenize([chunk.text for chunk in self.chunks]))

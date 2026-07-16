@@ -5,12 +5,18 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
-.venv
+.venv/
+venv/
 
-# Enviroment variables
+# Environment variables
 .env
 
 # Test
-test/data
+test/data/
+
+# IDE
+.vscode/

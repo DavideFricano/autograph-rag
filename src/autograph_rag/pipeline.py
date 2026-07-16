@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from autograph_rag.augmentation.augmenter import BaseAugmenter
 from autograph_rag.embedding.embedder import BaseEmbedder
 from autograph_rag.embedding.vector_store import BaseVectorStore
 from autograph_rag.generation.llm import BaseLLMClient
@@ -28,12 +29,12 @@ class IngestionPipeline:
         self.embedder = embedder
         self.vector_store = vector_store
 
-    def ingest(self, save_output: bool = False) -> list[Chunk]:
+    def ingest(self) -> list[Chunk]:
         """Returns the full chunk list so the caller can wire up QueryPipeline retrievers."""
-        docs = self.loader.load_documents(save_output)
+        docs = self.loader.load()
         chunks = [chunk for doc in docs for chunk in self.chunker.chunk(doc)]
         embeddings = self.embedder.embed_chunks([c.text for c in chunks])
-        self.vector_store.add(embeddings)
+        self.vector_store.add(chunks, embeddings)
         return chunks
 
 
@@ -44,16 +45,16 @@ class QueryPipeline:
         self,
         retrievers: list[BaseRetriever],
         ranker: FusionRanker,
+        augmenter: BaseAugmenter,
         llm: BaseLLMClient,
-        system: str,
         reranker: Reranker | None = None,
-        top_k: int = 10,
+        top_k: int | None = 10,
     ) -> None:
         self.retrievers = retrievers
         self.ranker = ranker
+        self.augmenter = augmenter
         self.reranker = reranker
         self.llm = llm
-        self.system = system
         self.top_k = top_k
 
     def _retrieve(self, query: str, top_k: int) -> list[ScoredChunk]:
@@ -63,15 +64,17 @@ class QueryPipeline:
 
     def _rank(self, ranked: list[ScoredChunk], query: str, top_n: int | None) -> list[ScoredChunk]:
         if self.reranker is not None:
-            ranked = self.reranker.rank([sc.chunk for sc in ranked], query, top_n)
-        return ranked
+            return self.reranker.rank([sc.chunk for sc in ranked], query, top_n)
+        return ranked if top_n is None else ranked[:top_n]
 
     def query(self, query: str, top_n: int | None = None) -> str:
         ranked = self._retrieve(query, self.top_k)
         reranked = self._rank(ranked, query, top_n)
-        return self.llm.answer(self.system, query, reranked)
+        messages = self.augmenter.build(query, reranked)
+        return self.llm.answer(messages)
 
     def stream(self, query: str, top_n: int | None = None) -> Iterator[str]:
         ranked = self._retrieve(query, self.top_k)
         reranked = self._rank(ranked, query, top_n)
-        yield from self.llm.stream(self.system, query, reranked)
+        messages = self.augmenter.build(query, reranked)
+        yield from self.llm.stream(messages)

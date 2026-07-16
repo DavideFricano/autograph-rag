@@ -1,44 +1,25 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from autograph_rag.augmentation.augmenter import PromptAugmenter
+from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import LocalEmbedder
-from autograph_rag.embedding.vector_store import FaissVectorStore
+from autograph_rag.embedding.vector_store import InMemoryVectorStore
 from autograph_rag.generation.llm import OllamaClient
 from autograph_rag.ingestion.chunker import HierarchicalChunker
-from autograph_rag.ingestion.loader import DoclingLoader
+from autograph_rag.ingestion.loader import FileSystemLoader
 from autograph_rag.pipeline import IngestionPipeline, QueryPipeline
 from autograph_rag.ranking.fusion_ranker import ReciprocalFusionRanker
 from autograph_rag.retrieval.lexical_retriever import BM25Retriever
-from autograph_rag.retrieval.vector_retriever import FaissVectorRetriever
-
-DATA_DIR = Path("data/raw")
-OUT_DIR = Path("data/out")
-EMBED_MODEL = "BAAI/bge-m3"
-OLLAMA_MODEL = "qwen2.5:7b"
-TOP_K = 10
-
-SYSTEM = """Sei un assistente clinico che risponde sempre in lingua italiana.
-Devi rispondere alla domanda posta SOLO basandoti sulle informazioni presenti nel contesto fornito.
-Esso è composto da estratti di documenti clinici a cui fai riferimento per rispondere.
-
-Regole:
-- Se la domanda non rientra nell'ambito medico o è troppo generica, rifiuta di rispondere.
-- Se la domanda non può essere soddisfatta con le informazioni fornite, rifiuta di rispondere.
-- Se la domanda contiene insulti, volgarità o è offensiva, rifiuta di rispondere.
-- Usa SOLO le informazioni presenti nel contesto.
-- Se è presente una tabella, estrai i dati e basati su quelli.
-- Non aggiungere nulla che non sia esplicitamente nel testo.
-- La risposta deve essere chiara, concisa e pertinente alla domanda.
-- Rispondi sempre in forma strutturata."""
-
+from autograph_rag.retrieval.vector_retriever import VectorRetriever
 
 if __name__ == "__main__":
+    settings = Settings()
+
     print("Ingestion...")
-    loader = DoclingLoader(input_dir=DATA_DIR, output_dir=OUT_DIR)
+    loader = FileSystemLoader(input_dir=settings.data_dir, output_dir=settings.out_dir, save_output=True)
     chunker = HierarchicalChunker()
-    embedder = LocalEmbedder(EMBED_MODEL)
-    vector_store = FaissVectorStore()
+    embedder = LocalEmbedder(settings.embed_model)
+    vector_store = InMemoryVectorStore()
 
     ingestion = IngestionPipeline(
         loader=loader,
@@ -46,21 +27,23 @@ if __name__ == "__main__":
         embedder=embedder,
         vector_store=vector_store,
     )
-    chunks = ingestion.ingest(save_output=True)
+    chunks = ingestion.ingest()
     print(f"Totale chunk: {len(chunks)}")
 
     print("Retrieval Augmented Generation...")
-    vector_retriever = FaissVectorRetriever(chunks, embedder, vector_store)
-    bm25_retriever = BM25Retriever(chunks, language="italian")
+    vector_retriever = VectorRetriever(embedder, vector_store)
+    bm25_retriever = BM25Retriever(chunks, language=settings.language)
     ranker = ReciprocalFusionRanker()
-    llm = OllamaClient(model=OLLAMA_MODEL)
+    system = settings.system_prompt_path.read_text(encoding="utf-8")
+    augmenter = PromptAugmenter(system=system)
+    llm = OllamaClient(model=settings.llm_model, url=settings.llm_url)
 
     pipeline = QueryPipeline(
         retrievers=[vector_retriever, bm25_retriever],
         ranker=ranker,
+        augmenter=augmenter,
         llm=llm,
-        system=SYSTEM,
-        top_k=TOP_K,
+        top_k=10
     )
 
     while True:

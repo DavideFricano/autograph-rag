@@ -1,7 +1,8 @@
 import hashlib
 from datetime import date
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
 
 
 def content_hash(text: str, length: int = 16) -> str:
@@ -11,39 +12,64 @@ def content_hash(text: str, length: int = 16) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 
 
+class RemoteDocument(BaseModel):
+    """The neutral raw payload the remote service guarantees.
+
+    Carries bytes plus a media type, not text: turning the payload into text (PDF ->
+    markdown, decode, ...) is the RAG side's job, so a single conversion path serves
+    both filesystem and remote sources. Binary payloads travel base64-encoded in JSON
+    and are decoded to real bytes on validation.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    data: Base64Bytes = Field(description="Raw document payload (base64-encoded in transit)")
+    media_type: str = Field(description="IANA media type of the payload, e.g. application/pdf")
+    external_id: str = Field(description="Stable id from the source system")
+    title: str = Field(description="Human-readable document name")
+    ingested_at: date = Field(description="When the service ingested the document")
+
+
 class Source(BaseModel):
     """Identifies the origin document of a chunk."""
 
-    id: str = Field(description="Identificativo stabile del documento, hash del contenuto completo")
-    name: str = Field(description="Il nome del file della sorgente dati")
-    time: date = Field(description="La data di caricamento della sorgente")
+    id: str = Field(description="Stable document identifier, hash of the full content")
+    name: str = Field(description="File name of the data source")
+    time: date = Field(description="Date the source was loaded")
 
 
 class Document(BaseModel):
-    """Raw document as loaded from disk, before chunking."""
+    """Document standard format as loaded."""
 
-    text: str = Field(description="Il testo completo del documento originale")
-    source: Source = Field(description="La sorgente del documento")
+    text: str = Field(description="Full text of the original document")
+    source: Source = Field(description="The document's source")
 
 
 class Metadata(BaseModel):
     """Contextual metadata attached to a single chunk."""
 
-    source: Source = Field(description="La sorgente di questo specifico frammento")
-    title: str = Field(description="Il titolo della sezione del documento da cui è estratto il chunk")
-    page: int | None = Field(default=None, description="Numero opzionale di pagina")
+    source: Source = Field(description="Source of this specific chunk")
+    title: str = Field(description="Title of the document section the chunk was extracted from")
+    page: int | None = Field(default=None, description="Optional page number")
 
 
 class Chunk(BaseModel):
     """Atomic unit of text that flows through the retrieval pipeline."""
 
-    id: str = Field(description="Identificativo univoco del chunk")
-    text: str = Field(description="Il testo del frammento informativo")
-    metadata: Metadata = Field(description="I metadati del chunk")
+    id: str = Field(description="Unique chunk identifier")
+    text: str = Field(description="Text content of the chunk")
+    metadata: Metadata = Field(description="Chunk metadata")
 
 
 class ScoredChunk(BaseModel):
     """Chunk paired with a retrieval or ranking score."""
 
-    chunk: Chunk = Field(description="Il frammento informativo estratto")
-    score: float = Field(description="Il punteggio di rilevanza lessicale/semantica")
+    chunk: Chunk = Field(description="The retrieved chunk")
+    score: float = Field(description="Lexical/semantic relevance score")
+
+
+class Message(BaseModel):
+    """A single chat message: the neutral transport between augmentation and generation."""
+
+    role: Literal["system", "user", "assistant"] = Field(description="Author role of the message")
+    content: str = Field(description="Text content of the message")

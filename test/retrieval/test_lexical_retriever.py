@@ -15,22 +15,22 @@ def _chunks():
 
 
 def test_fever_query_returns_fever_chunks_first():
-    results = BM25Retriever(_chunks()).retrieve("febbre", top_k=2)
+    results = BM25Retriever(_chunks(), language="italian").retrieve("febbre", top_k=2)
     top_ids = {r.chunk.id for r in results}
     assert "c0" in top_ids  # "febbre alta"
     assert "c2" in top_ids  # "Febbre e brividi"
 
 def test_pressure_query_returns_pressure_chunk_first():
-    results = BM25Retriever(_chunks()).retrieve("pressione arteriosa", top_k=1)
+    results = BM25Retriever(_chunks(), language="italian").retrieve("pressione arteriosa", top_k=1)
     assert results[0].chunk.id == "c1"
     assert "pressione arteriosa" in results[0].chunk.text.lower()
 
 def test_retrieve_sorted_by_score():
-    results = BM25Retriever(_chunks()).retrieve("febbre", top_k=3)
+    results = BM25Retriever(_chunks(), language="italian").retrieve("febbre", top_k=3)
     scores = [r.score for r in results]
     assert scores == sorted(scores, reverse=True)
 
 def test_tokenize_removes_stopwords():
-    r = BM25Retriever(_chunks())
+    r = BM25Retriever(_chunks(), language="italian")
     tokens = r._tokenize("il paziente ha la febbre")
     assert "il" not in tokens and "la" not in tokens

@@ -25,5 +25,5 @@ class CrossReranker(Reranker):
     def rank(self, chunks: list[Chunk], query: str, top_k: int | None = None) -> list[ScoredChunk]:
         pairs = [(query, chunk.text) for chunk in chunks]
         scores = self.model.predict(pairs)
-        scored = [ScoredChunk(chunk=c, score=float(s)) for c, s in zip(chunks, scores, strict=False)]
+        scored = [ScoredChunk(chunk=c, score=float(s)) for c, s in zip(chunks, scores, strict=True)]
         return self.extract_top_k(scored, top_k)

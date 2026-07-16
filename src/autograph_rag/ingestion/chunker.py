@@ -196,20 +196,21 @@ class SemanticChunker(BaseChunker):
         if len(sentences) == 1:
             return [self._make_chunk(doc, sentences[0])]
 
-        embeddings = self.model.encode(sentences, convert_to_numpy=True)
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        embeddings = embeddings / np.where(norms == 0, 1, norms)
+        embeddings = self.model.encode(sentences, convert_to_numpy=True, normalize_embeddings=True)
 
         groups: list[list[str]] = []
         current: list[str] = [sentences[0]]
+        current_len = len(sentences[0])
         for idx in range(1, len(sentences)):
             similarity = float(np.dot(embeddings[idx - 1], embeddings[idx]))
-            fits = len(" ".join(current)) + 1 + len(sentences[idx]) <= self.max_chunk_size
+            fits = current_len + 1 + len(sentences[idx]) <= self.max_chunk_size
             if similarity >= self.breakpoint_threshold and fits:
                 current.append(sentences[idx])
+                current_len += 1 + len(sentences[idx])
             else:
                 groups.append(current)
                 current = [sentences[idx]]
+                current_len = len(sentences[idx])
         groups.append(current)
 
         return [

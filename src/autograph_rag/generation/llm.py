@@ -7,58 +7,57 @@ from collections.abc import Iterator
 import requests
 from openai import OpenAI
 
-from autograph_rag.augmentation.prompter import PromptGenerator
-from autograph_rag.types import ScoredChunk
+from autograph_rag.types import Message
 
 
 class BaseLLMClient(ABC):
-    """Common interface for LLM backends."""
+    """Common interface for LLM backends. Consumes prompts as a neutral list[Message];
+    prompt assembly is the augmenter's job, not the client's."""
 
     @abstractmethod
-    def stream(self, system: str, query: str, context: str | list[ScoredChunk], **kwargs) -> Iterator[str]:
+    def stream(self, messages: list[Message], **kwargs) -> Iterator[str]:
         pass
 
     @abstractmethod
-    def answer(self, system: str, query: str, context: str | list[ScoredChunk], **kwargs) -> str:
+    def answer(self, messages: list[Message], **kwargs) -> str:
         pass
 
 
 class OllamaClient(BaseLLMClient):
-    """LLM client for locally-hosted Ollama models via the /api/generate endpoint."""
+    """LLM client for locally-hosted Ollama models via the /api/chat endpoint."""
 
-    def __init__(self, model: str, url: str = "http://localhost:11434/api/generate"):
+    def __init__(self, model: str, url: str = "http://localhost:11434/api/chat"):
         self.model = model
         self.url = url
-        self.prompt_generator = PromptGenerator()
 
-    def _payload(self, prompt: str, temperature: float, num_ctx: int, stream: bool) -> dict:
+    def _payload(self, messages: list[Message], temperature: float, num_ctx: int, stream: bool) -> dict:
         return {
             "model": self.model,
-            "prompt": prompt,
+            "messages": [m.model_dump() for m in messages],
             "stream": stream,
             "options": {"temperature": temperature, "num_ctx": num_ctx},
         }
 
-    def stream(self, system: str, query: str, context: str | list[ScoredChunk], temperature: float = 0.1, num_ctx: int = 4096) -> Iterator[str]:
-        prompt = self.prompt_generator.build_prompt(system, query, context)
-        response = requests.post(self.url, json=self._payload(prompt, temperature, num_ctx, stream=True), stream=True, timeout=800)
+    def stream(self, messages: list[Message], temperature: float = 0.1, num_ctx: int = 4096) -> Iterator[str]:
+        response = requests.post(self.url, json=self._payload(messages, temperature, num_ctx, stream=True), stream=True, timeout=800)
+        response.raise_for_status()
         for line in response.iter_lines():
             if not line:
                 continue
             try:
                 data = json.loads(line.decode("utf-8"))
-            except Exception:
+            except json.JSONDecodeError:
                 continue
-            token = data.get("response", "")
+            token = data.get("message", {}).get("content", "")
             if token:
                 yield token
             if data.get("done", False):
                 break
 
-    def answer(self, system: str, query: str, context: str | list[ScoredChunk], temperature: float = 0.1, num_ctx: int = 4096) -> str:
-        prompt = self.prompt_generator.build_prompt(system, query, context)
-        response = requests.post(self.url, json=self._payload(prompt, temperature, num_ctx, stream=False), timeout=800)
-        return response.json().get("response", "")
+    def answer(self, messages: list[Message], temperature: float = 0.1, num_ctx: int = 4096) -> str:
+        response = requests.post(self.url, json=self._payload(messages, temperature, num_ctx, stream=False), timeout=800)
+        response.raise_for_status()
+        return response.json().get("message", {}).get("content", "")
 
 
 class OpenAIClient(BaseLLMClient):
@@ -67,18 +66,11 @@ class OpenAIClient(BaseLLMClient):
     def __init__(self, model: str):
         self.client = OpenAI()
         self.model = model
-        self.prompt_generator = PromptGenerator()
 
-    def _messages(self, system: str, query: str, context: str) -> list[dict]:
-        return [
-            {"role": "system", "content": self.prompt_generator.build_system_prompt(system)},
-            {"role": "user", "content": self.prompt_generator.build_user_prompt(query, context)},
-        ]
-
-    def stream(self, system: str, query: str, context: str | list[ScoredChunk], temperature: float = 0.1) -> Iterator[str]:
+    def stream(self, messages: list[Message], temperature: float = 0.1) -> Iterator[str]:
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=self._messages(system, query, context),
+            messages=[m.model_dump() for m in messages],
             temperature=temperature,
             stream=True,
         )
@@ -87,10 +79,10 @@ class OpenAIClient(BaseLLMClient):
             if token:
                 yield token
 
-    def answer(self, system: str, query: str, context: str | list[ScoredChunk], temperature: float = 0.1) -> str:
+    def answer(self, messages: list[Message], temperature: float = 0.1) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=self._messages(system, query, context),
+            messages=[m.model_dump() for m in messages],
             temperature=temperature,
             stream=False,
         )
