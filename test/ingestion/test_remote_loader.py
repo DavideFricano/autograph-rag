@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from datetime import date
 
 from autograph_rag.ingestion.loader import ApiLoader, RemoteLoader
-from autograph_rag.types import Document
+from autograph_rag.types import Document, Origin
 
 
 def _item(**overrides):
@@ -45,6 +45,7 @@ def test_load_maps_remote_records_to_documents():
     assert first.source.id == "doc-1"
     assert first.source.name == "referto.pdf"
     assert first.source.time == date(2026, 7, 13)
+    assert first.source.origin == Origin.REMOTE
 
 
 def test_load_decodes_base64_payload():

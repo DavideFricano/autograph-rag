@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 
 from autograph_rag.ranking.fusion_ranker import ReciprocalFusionRanker, RelativeFusionRanker
-from autograph_rag.types import Chunk, Metadata, ScoredChunk, Source
+from autograph_rag.types import Chunk, Metadata, Origin, ScoredChunk, Source
 
 
 def _sc(chunk_id, score):
-    s = Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1))
+    s = Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
     c = Chunk(id=chunk_id, text="T", metadata=Metadata(source=s, title="S"))
     return ScoredChunk(chunk=c, score=score)
 

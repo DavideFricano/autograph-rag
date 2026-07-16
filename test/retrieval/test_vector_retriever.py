@@ -4,7 +4,7 @@ import numpy as np
 
 from autograph_rag.embedding.vector_store import InMemoryVectorStore
 from autograph_rag.retrieval.vector_retriever import VectorRetriever
-from autograph_rag.types import Chunk, Metadata, Source
+from autograph_rag.types import Chunk, Metadata, Origin, Source
 
 
 class _FakeEmbedder:
@@ -17,7 +17,7 @@ class _FakeEmbedder:
 
 
 def _chunks():
-    s = Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1))
+    s = Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
     return [
         Chunk(id=f"c{i}", text=f"Testo {i}", metadata=Metadata(source=s, title="S"))
         for i in range(3)

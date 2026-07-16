@@ -1,5 +1,6 @@
 import hashlib
 from datetime import date
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
@@ -30,11 +31,22 @@ class RemoteDocument(BaseModel):
     ingested_at: date = Field(description="When the service ingested the document")
 
 
+class Origin(StrEnum):
+    """Where a document was acquired from."""
+
+    LOCAL = "local"  # filesystem
+    REMOTE = "remote"  # pulled from an external service
+
+
 class Source(BaseModel):
     """Identifies the origin document of a chunk."""
 
-    id: str = Field(description="Stable document identifier, hash of the full content")
-    name: str = Field(description="File name of the data source")
+    id: str = Field(
+        description="Stable identity of the document within its origin "
+        "(file name for filesystem, external_id for remote); namespaces the chunk ids"
+    )
+    name: str = Field(description="Name of the data source")
+    origin: Origin = Field(description="Acquisition channel the document came from")
     time: date = Field(description="Date the source was loaded")
 
 

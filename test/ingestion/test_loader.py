@@ -5,7 +5,7 @@ import pytest
 
 from autograph_rag.ingestion.converter import BaseConverter
 from autograph_rag.ingestion.loader import FileSystemLoader, LocalLoader
-from autograph_rag.types import Document
+from autograph_rag.types import Document, Origin
 
 
 class _FakeConverter(BaseConverter):
@@ -67,6 +67,9 @@ def test_load_returns_documents_for_each_file():
         assert len(docs) == 2
         assert all(isinstance(d, Document) for d in docs)
         assert {d.source.name for d in docs} == {"a.txt", "b.txt"}
+        # id is the file name (stable identity), not a content hash
+        assert {d.source.id for d in docs} == {"a.txt", "b.txt"}
+        assert all(d.source.origin == Origin.LOCAL for d in docs)
         assert docs[0].text == "content of a.txt"
 
 

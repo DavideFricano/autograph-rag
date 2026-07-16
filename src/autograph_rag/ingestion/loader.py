@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 
 from autograph_rag.ingestion.converter import BaseConverter, MarkdownConverter
-from autograph_rag.types import Document, RemoteDocument, Source, content_hash
+from autograph_rag.types import Document, Origin, RemoteDocument, Source
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,10 @@ class FileSystemLoader(LocalLoader):
                 self._save_output(file_name, text)
             yield Document(
                 text=text,
-                source=Source(id=content_hash(text), name=file_name, time=date.today()),
+                # The file name is the stable identity of the document within its
+                # origin dir (unique in a flat dir), mirroring external_id for remote
+                # sources: it keeps chunk ids stable across content edits.
+                source=Source(id=file_name, name=file_name, origin=Origin.LOCAL, time=date.today()),
             )
 
     def _save_output(self, filename: str, text: str) -> None:
@@ -100,7 +103,7 @@ class RemoteLoader(BaseLoader):
         text = self.converter.convert_stream(item.data, item.media_type, name=item.title)
         return Document(
             text=text,
-            source=Source(id=item.external_id, name=item.title, time=item.ingested_at),
+            source=Source(id=item.external_id, name=item.title, origin=Origin.REMOTE, time=item.ingested_at),
         )
 
 

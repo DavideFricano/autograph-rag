@@ -9,11 +9,13 @@ from autograph_rag.ingestion.chunker import (
     SemanticChunker,
     SentenceChunker,
 )
-from autograph_rag.types import Document, Source
+from autograph_rag.types import Document, Origin, Source
 
 
 def _doc(text: str) -> Document:
-    return Document(text=text, source=Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1)))
+    return Document(
+        text=text, source=Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
+    )
 
 
 # --- HierarchicalChunker ---

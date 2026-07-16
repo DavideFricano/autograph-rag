@@ -1,11 +1,11 @@
 from datetime import date
 
 from autograph_rag.retrieval.lexical_retriever import BM25Retriever
-from autograph_rag.types import Chunk, Metadata, Source
+from autograph_rag.types import Chunk, Metadata, Origin, Source
 
 
 def _chunks():
-    s = Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1))
+    s = Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
     testi = [
         "Il paziente presenta febbre alta e tosse.",
         "La pressione arteriosa è nella norma.",

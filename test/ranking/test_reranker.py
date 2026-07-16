@@ -1,11 +1,11 @@
 from datetime import date
 
 from autograph_rag.ranking.reranker import CrossReranker
-from autograph_rag.types import Chunk, Metadata, Source
+from autograph_rag.types import Chunk, Metadata, Origin, Source
 
 
 def _chunks():
-    s = Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1))
+    s = Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
     return [
         Chunk(id="c0", text="Testo A", metadata=Metadata(source=s, title="S")),
         Chunk(id="c1", text="Testo B", metadata=Metadata(source=s, title="S")),

@@ -8,11 +8,11 @@ from autograph_rag.embedding.vector_store import (
     PersistentVectorStore,
     RemoteVectorStore,
 )
-from autograph_rag.types import Chunk, Metadata, Source
+from autograph_rag.types import Chunk, Metadata, Origin, Source
 
 
 def _chunks(n, texts=None):
-    s = Source(id="doc1", name="doc.pdf", time=date(2024, 1, 1))
+    s = Source(id="doc1", name="doc.pdf", origin=Origin.LOCAL, time=date(2024, 1, 1))
     return [
         Chunk(
             id=f"c{i}",
