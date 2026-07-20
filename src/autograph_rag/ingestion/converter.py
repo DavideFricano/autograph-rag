@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import mimetypes
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import StrEnum
 from io import BytesIO
 from pathlib import Path
@@ -21,55 +21,36 @@ class Parser(StrEnum):
     TEXT = "text"  # already textual, decoded as-is
 
 
-# A file resolves its media type from the extension; a remote payload gets it from
-# the gateway. Both then dispatch on the media type alone, via the tables below.
-_EXTENSION_MEDIA_TYPES: dict[str, str] = {
-    ".pdf": "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".csv": "text/csv",
-    ".json": "application/json",
-    ".html": "text/html",
-    ".htm": "text/html",
-    ".md": "text/markdown",
-    ".txt": "text/plain",
-}
+@dataclass(frozen=True)
+class Format:
+    """A supported format: its media type, the parser that handles it, and the
+    file extensions it maps to (the first one is the representative extension)."""
 
-# Which parser handles each media type. Overlapping formats are assigned deliberately:
-# Docling for rich layout, MarkItDown for structured/tabular/web, TEXT decoded as-is.
-# A media type not listed here fails loud at conversion time.
-_PARSER_BY_MEDIA_TYPE: dict[str, Parser] = {
-    "application/pdf": Parser.DOCLING,
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": Parser.DOCLING,
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": Parser.DOCLING,
-    "image/png": Parser.DOCLING,
-    "image/jpeg": Parser.DOCLING,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": Parser.MARKITDOWN,
-    "text/csv": Parser.MARKITDOWN,
-    "application/json": Parser.MARKITDOWN,
-    "text/html": Parser.MARKITDOWN,
-    "text/markdown": Parser.TEXT,
-    "text/plain": Parser.TEXT,
-}
-
-# A representative extension per media type, so Docling/MarkItDown can detect the
-# format from an in-memory stream name (they key off the extension, not the bytes).
-_MEDIA_TYPE_EXTENSION = {mt: ext for ext, mt in _EXTENSION_MEDIA_TYPES.items()}
+    media_type: str
+    parser: Parser
+    extensions: tuple[str, ...]
 
 
-def media_type_for_path(path: Path) -> str:
-    """Resolves a file's media type from its extension (a filesystem-source concern)."""
-    suffix = path.suffix.lower()
-    if suffix in _EXTENSION_MEDIA_TYPES:
-        return _EXTENSION_MEDIA_TYPES[suffix]
-    guessed, _ = mimetypes.guess_type(path.name)
-    if guessed is not None:
-        return guessed
-    raise ValueError(f"Cannot determine media type for file: {path.name}")
+# A file resolves its media type from the extension,
+# a remote payload gets it from the gateway; both then dispatch on the media type.
+# Adding a format is one row here — the lookup indexes below stay consistent.
+FORMATS: tuple[Format, ...] = (
+    Format("application/pdf", Parser.DOCLING, (".pdf",)),
+    Format("application/vnd.openxmlformats-officedocument.wordprocessingml.document", Parser.DOCLING, (".docx",)),
+    Format("application/vnd.openxmlformats-officedocument.presentationml.presentation", Parser.DOCLING, (".pptx",)),
+    Format("image/png", Parser.DOCLING, (".png",)),
+    Format("image/jpeg", Parser.DOCLING, (".jpg", ".jpeg")),
+    Format("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Parser.MARKITDOWN, (".xlsx",)),
+    Format("text/csv", Parser.MARKITDOWN, (".csv",)),
+    Format("application/json", Parser.MARKITDOWN, (".json",)),
+    Format("text/html", Parser.MARKITDOWN, (".html", ".htm")),
+    Format("text/markdown", Parser.TEXT, (".md",)),
+    Format("text/plain", Parser.TEXT, (".txt",)),
+)
+
+PARSER_BY_MEDIA_TYPE = {f.media_type: f.parser for f in FORMATS}
+EXTENSION_BY_MEDIA_TYPE = {f.media_type: f.extensions[0] for f in FORMATS}
+MEDIA_TYPE_BY_EXTENSION = {ext: f.media_type for f in FORMATS for ext in f.extensions}
 
 
 class BaseConverter(ABC):
@@ -96,26 +77,25 @@ class MarkdownConverter(BaseConverter):
         )
         self.markitdown = MarkItDown()
 
+
     def convert_stream(self, data: bytes, media_type: str, name: str = "document") -> str:
-        match _PARSER_BY_MEDIA_TYPE.get(media_type):
+        ext = EXTENSION_BY_MEDIA_TYPE.get(media_type, "")
+        match PARSER_BY_MEDIA_TYPE.get(media_type):
             case Parser.DOCLING:
-                ext = _MEDIA_TYPE_EXTENSION.get(media_type, "")
                 if not name.lower().endswith(ext):
                     name = f"{name}{ext}"
                 result = self.docling.convert(DocumentStream(name=name, stream=BytesIO(data)))
                 return result.document.export_to_markdown(included_content_layers={ContentLayer.BODY})
             case Parser.MARKITDOWN:
-                result = self.markitdown.convert_stream(
-                    BytesIO(data), file_extension=_MEDIA_TYPE_EXTENSION.get(media_type)
-                )
-                return result.text_content
+                return self.markitdown.convert_stream(BytesIO(data), file_extension=ext).text_content
             case Parser.TEXT:
                 return data.decode("utf-8")
             case _:
                 raise ValueError(f"Unsupported media type: {media_type}")
 
     def convert_file(self, path: Path) -> str:
-        match _PARSER_BY_MEDIA_TYPE.get(media_type_for_path(path)):
+        media_type = MEDIA_TYPE_BY_EXTENSION.get(path.suffix.lower())
+        match PARSER_BY_MEDIA_TYPE.get(media_type):
             case Parser.DOCLING:
                 result = self.docling.convert(str(path))
                 return result.document.export_to_markdown(included_content_layers={ContentLayer.BODY})
@@ -124,4 +104,4 @@ class MarkdownConverter(BaseConverter):
             case Parser.TEXT:
                 return path.read_text(encoding="utf-8")
             case _:
-                raise ValueError(f"Unsupported media type for file: {path.name}")
+                raise ValueError(f"Unsupported file extension: {path.name}")

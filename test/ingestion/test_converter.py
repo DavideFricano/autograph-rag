@@ -5,7 +5,6 @@ import pytest
 from autograph_rag.ingestion.converter import (
     BaseConverter,
     MarkdownConverter,
-    media_type_for_path,
 )
 
 
@@ -33,13 +32,14 @@ def test_unknown_media_type_fails_loud():
         MarkdownConverter().convert_stream(b"x", "application/octet-stream")
 
 
-# --- media_type_for_path: extension resolution (a source concern) ---
+# --- convert_file: extension resolution (a source concern) ---
 
-def test_resolves_media_type_from_extension_case_insensitive():
-    assert media_type_for_path(Path("a/b.PDF")) == "application/pdf"
-    assert media_type_for_path(Path("x.csv")) == "text/csv"
+def test_convert_file_resolves_extension_case_insensitive(tmp_path):
+    path = tmp_path / "note.TXT"
+    path.write_text("ciao mondo")
+    assert MarkdownConverter().convert_file(path) == "ciao mondo"
 
 
-def test_unknown_extension_fails_loud():
+def test_convert_file_unknown_extension_fails_loud():
     with pytest.raises(ValueError):
-        media_type_for_path(Path("mystery.zzz"))
+        MarkdownConverter().convert_file(Path("mystery.zzz"))

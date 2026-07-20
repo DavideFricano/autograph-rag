@@ -1,6 +1,5 @@
 import base64
 from collections.abc import Iterable
-
 from datetime import date
 
 from autograph_rag.ingestion.loader import ApiLoader, RemoteLoader

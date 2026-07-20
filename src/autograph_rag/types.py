@@ -41,10 +41,7 @@ class Origin(StrEnum):
 class Source(BaseModel):
     """Identifies the origin document of a chunk."""
 
-    id: str = Field(
-        description="Stable identity of the document within its origin "
-        "(file name for filesystem, external_id for remote); namespaces the chunk ids"
-    )
+    id: str = Field(description="Stable identitificator of the document")
     name: str = Field(description="Name of the data source")
     origin: Origin = Field(description="Acquisition channel the document came from")
     time: date = Field(description="Date the source was loaded")
