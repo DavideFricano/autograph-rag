@@ -32,5 +32,5 @@ class Settings(BaseSettings):
     vector_store_api_key: str | None = None  # used by the remote tier
 
     # Ingestion paths
-    data_dir: Path = Path("data/raw")
+    in_dir: Path = Path("data/raw")
     out_dir: Path = Path("data/out")

@@ -30,7 +30,7 @@ class LocalLoader(BaseLoader):
         self.converter = converter or MarkdownConverter()
 
 
-class FileSystemLoader(LocalLoader):
+class FileLoader(LocalLoader):
     """Loads raw files from a directory, converting each to markdown by media type."""
 
     def __init__(

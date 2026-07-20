@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from autograph_rag.ingestion.converter import BaseConverter
-from autograph_rag.ingestion.loader import FileSystemLoader, LocalLoader
+from autograph_rag.ingestion.loader import FileLoader, LocalLoader
 from autograph_rag.types import Document, Origin
 
 
@@ -27,12 +27,12 @@ class _FailingConverter(_FakeConverter):
         return super().convert_file(path)
 
 
-def _loader(input_dir: Path, output_dir: Path, converter=None, **kwargs) -> FileSystemLoader:
-    return FileSystemLoader(input_dir, output_dir, converter=converter or _FakeConverter(), **kwargs)
+def _loader(input_dir: Path, output_dir: Path, converter=None, **kwargs) -> FileLoader:
+    return FileLoader(input_dir, output_dir, converter=converter or _FakeConverter(), **kwargs)
 
 
-def test_filesystem_loader_is_a_local_loader():
-    assert issubclass(FileSystemLoader, LocalLoader)
+def test_file_loader_is_a_local_loader():
+    assert issubclass(FileLoader, LocalLoader)
 
 
 def test_raises_if_input_dir_missing():

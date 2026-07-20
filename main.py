@@ -6,7 +6,7 @@ from autograph_rag.embedding.embedder import LocalEmbedder
 from autograph_rag.embedding.vector_store import InMemoryVectorStore
 from autograph_rag.generation.llm import OllamaClient
 from autograph_rag.ingestion.chunker import HierarchicalChunker
-from autograph_rag.ingestion.loader import FileSystemLoader
+from autograph_rag.ingestion.loader import FileLoader
 from autograph_rag.pipeline import IngestionPipeline, QueryPipeline
 from autograph_rag.ranking.fusion_ranker import ReciprocalFusionRanker
 from autograph_rag.retrieval.lexical_retriever import BM25Retriever
@@ -16,7 +16,7 @@ if __name__ == "__main__":
     settings = Settings()
 
     print("Ingestion...")
-    loader = FileSystemLoader(input_dir=settings.data_dir, output_dir=settings.out_dir, save_output=True)
+    loader = FileLoader(input_dir=settings.in_dir, output_dir=settings.out_dir, save_output=True)
     chunker = HierarchicalChunker()
     embedder = LocalEmbedder(settings.embed_model)
     vector_store = InMemoryVectorStore()
