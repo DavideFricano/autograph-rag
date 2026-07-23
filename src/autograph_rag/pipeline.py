@@ -3,54 +3,45 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from autograph_rag.augmentation.augmenter import BaseAugmenter
-from autograph_rag.embedding.embedder import BaseEmbedder
-from autograph_rag.embedding.vector_store import BaseVectorStore
 from autograph_rag.generation.llm import BaseLLMClient
 from autograph_rag.ingestion.chunker import BaseChunker
 from autograph_rag.ingestion.loader import BaseLoader
 from autograph_rag.ranking.fusion_ranker import FusionRanker
 from autograph_rag.ranking.reranker import Reranker
-from autograph_rag.retrieval.retriever import BaseRetriever
+from autograph_rag.store.base_store import BaseStore
 from autograph_rag.types import Chunk, ScoredChunk
 
 
 class IngestionPipeline:
-    """Offline pipeline: loads documents, chunks, embeds, and populates the vector store."""
+    """Offline pipeline: loads documents, chunks them, and populates the stores."""
 
-    def __init__(
-        self,
-        loader: BaseLoader,
-        chunker: BaseChunker,
-        embedder: BaseEmbedder,
-        vector_store: BaseVectorStore,
-    ) -> None:
+    def __init__(self, loader: BaseLoader, chunker: BaseChunker, stores: list[BaseStore]) -> None:
         self.loader = loader
         self.chunker = chunker
-        self.embedder = embedder
-        self.vector_store = vector_store
+        self.stores = stores
 
     def ingest(self) -> list[Chunk]:
-        """Returns the full chunk list so the caller can wire up QueryPipeline retrievers."""
+        """Loads and chunks documents, adding them to every store. Returns the chunks."""
         docs = self.loader.load()
         chunks = [chunk for doc in docs for chunk in self.chunker.chunk(doc)]
-        embeddings = self.embedder.embed_chunks([c.text for c in chunks])
-        self.vector_store.add(chunks, embeddings)
+        for store in self.stores:
+            store.add(chunks)
         return chunks
 
 
 class QueryPipeline:
-    """Online pipeline: retrieves, fuses, optionally reranks, and generates an answer."""
+    """Online pipeline: searches the stores, fuses, optionally reranks, and generates."""
 
     def __init__(
         self,
-        retrievers: list[BaseRetriever],
+        stores: list[BaseStore],
         ranker: FusionRanker,
         augmenter: BaseAugmenter,
         llm: BaseLLMClient,
         reranker: Reranker | None = None,
-        top_k: int | None = 10,
+        top_k: int = 10,
     ) -> None:
-        self.retrievers = retrievers
+        self.stores = stores
         self.ranker = ranker
         self.augmenter = augmenter
         self.reranker = reranker
@@ -58,9 +49,8 @@ class QueryPipeline:
         self.top_k = top_k
 
     def _retrieve(self, query: str, top_k: int) -> list[ScoredChunk]:
-        results = [r.retrieve(query, top_k) for r in self.retrievers]
-        ranked = self.ranker.rank(results, top_k)
-        return ranked
+        results = [store.search(query, top_k) for store in self.stores]
+        return self.ranker.rank(results, top_k)
 
     def _rank(self, ranked: list[ScoredChunk], query: str, top_n: int | None) -> list[ScoredChunk]:
         if self.reranker is not None:
@@ -78,3 +68,21 @@ class QueryPipeline:
         reranked = self._rank(ranked, query, top_n)
         messages = self.augmenter.build(query, reranked)
         yield from self.llm.stream(messages)
+
+
+class RagPipeline:
+    """Collects the ingestion and query pipelines behind one object (facade)"""
+
+    def __init__(
+        self,
+        loader: BaseLoader,
+        chunker: BaseChunker,
+        stores: list[BaseStore],
+        ranker: FusionRanker,
+        augmenter: BaseAugmenter,
+        llm: BaseLLMClient,
+        reranker: Reranker | None = None,
+        top_k: int = 10,
+    ) -> None:
+        self.ingest_pipeline = IngestionPipeline(loader, chunker, stores)
+        self.query_pipeline = QueryPipeline(stores, ranker, augmenter, llm, reranker, top_k)

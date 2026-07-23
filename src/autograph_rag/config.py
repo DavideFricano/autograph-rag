@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from autograph_rag.types import Language
+
 
 class Settings(BaseSettings):
     """Runtime configuration, read from environment variables or a .env file.
@@ -15,7 +17,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # General (e.g. BM25 stemming and stopwords)
-    language: str = "italian"
+    language: Language = Language.ITALIAN
 
     # Generation (Ollama endpoint by default)
     llm_url: str = "http://localhost:11434/api/chat"

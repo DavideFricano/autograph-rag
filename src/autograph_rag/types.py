@@ -7,9 +7,7 @@ from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
 
 
 def content_hash(text: str, length: int = 16) -> str:
-    """Deterministic fingerprint of text content, used as a stable/idempotent id.
-    """
-    
+    """Deterministic fingerprint of text content, used as a stable/idempotent id."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 
 
@@ -38,10 +36,21 @@ class Origin(StrEnum):
     REMOTE = "remote"  # pulled from an external service
 
 
+class Language(StrEnum):
+    """Language for lexical tokenization. Values are the names the Snowball stemmer
+    and NLTK stopwords expect, so a member can be passed to either directly."""
+
+    ENGLISH = "english"
+    ITALIAN = "italian"
+    FRENCH = "french"
+    GERMAN = "german"
+    SPANISH = "spanish"
+
+
 class Source(BaseModel):
     """Identifies the origin document of a chunk."""
 
-    id: str = Field(description="Stable identitificator of the document")
+    id: str = Field(description="Stable identifier of the document")
     name: str = Field(description="Name of the data source")
     origin: Origin = Field(description="Acquisition channel the document came from")
     time: date = Field(description="Date the source was loaded")
