@@ -24,18 +24,4 @@ uv sync
 
 ## Configuration
 
-When building your own entry point, `autograph_rag.config.Settings` reads typed settings from the environment or a `.env` file (copy `.env.example` to `.env`). Every value has a local default, so an empty environment works out of the box.
-
-| Variable | Default | Description |
-|---|---|---|
-| `LANGUAGE` | `italian` | Language for BM25 stemming and stopwords |
-| `LLM_URL` | `http://localhost:11434/api/chat` | Generation endpoint (Ollama by default) |
-| `LLM_MODEL` | `qwen2.5:7b` | Generation model |
-| `SYSTEM_PROMPT_PATH` | `prompts/system_prompt.md` | Path to the system prompt file |
-| `EMBED_MODEL` | `BAAI/bge-m3` | Embedding model |
-| `VECTOR_STORE_COLLECTION` | `data` | Collection name (persistent/remote tiers) |
-| `VECTOR_STORE_PATH` | `./data/db/vector` | On-disk path for the `persistent` tier |
-| `VECTOR_STORE_URL` | *(unset)* | Qdrant server URL for the `remote` tier |
-| `VECTOR_STORE_API_KEY` | *(unset)* | Qdrant API key for the `remote` tier |
-| `DATA_DIR` | `data/raw` | Input documents directory |
-| `OUT_DIR` | `data/out` | Processed output directory |
+When building your own entry point, `autograph_rag.config.Settings` reads typed settings from the environment or a `.env` file. Every value has a local default, so an empty environment works out of the box — see `Settings` for the current fields.

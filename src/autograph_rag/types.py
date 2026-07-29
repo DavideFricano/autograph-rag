@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
 
 
-def content_hash(text: str, length: int = 16) -> str:
+def content_hash(text: str, length: int = 32) -> str:
     """Deterministic fingerprint of text content, used as a stable/idempotent id."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 

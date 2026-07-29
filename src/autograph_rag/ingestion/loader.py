@@ -69,7 +69,8 @@ class FileLoader(LocalLoader):
                 text=text,
                 # The file name is the stable identity of the document within its
                 # origin dir (unique in a flat dir), mirroring external_id for remote
-                # sources: it keeps chunk ids stable across content edits.
+                # sources: it is the deletion key, stable across content edits (the
+                # per-chunk id is content-hashed, so it changes when the text does).
                 source=Source(id=file_name, name=file_name, origin=Origin.LOCAL, time=date.today()),
             )
 

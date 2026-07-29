@@ -10,7 +10,7 @@ from llama_index.core.node_parser import MarkdownNodeParser
 from nltk.tokenize import sent_tokenize
 from sentence_transformers import SentenceTransformer
 
-from autograph_rag.types import Chunk, Document, Metadata, content_hash
+from autograph_rag.types import Chunk, Document, Language, Metadata, content_hash
 
 
 class BaseChunker(ABC):
@@ -54,7 +54,7 @@ class SentenceChunker(BaseChunker):
         self,
         sentences_per_chunk: int = 5,
         overlap: int = 1,
-        language: str = "italian",
+        language: Language = Language.ITALIAN,
     ) -> None:
         if overlap >= sentences_per_chunk:
             raise ValueError("overlap must be smaller than sentences_per_chunk")
@@ -181,7 +181,7 @@ class SemanticChunker(BaseChunker):
         model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         breakpoint_threshold: float = 0.5,
         max_chunk_size: int = 2048,
-        language: str = "italian",
+        language: Language = Language.ITALIAN,
     ) -> None:
         self.model = SentenceTransformer(model_name)
         self.breakpoint_threshold = breakpoint_threshold

@@ -4,85 +4,115 @@ from collections.abc import Iterator
 
 from autograph_rag.augmentation.augmenter import BaseAugmenter
 from autograph_rag.generation.llm import BaseLLMClient
+from autograph_rag.indexing.index import BaseIndex
 from autograph_rag.ingestion.chunker import BaseChunker
 from autograph_rag.ingestion.loader import BaseLoader
 from autograph_rag.ranking.fusion_ranker import FusionRanker
 from autograph_rag.ranking.reranker import Reranker
-from autograph_rag.store.base_store import BaseStore
+from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, ScoredChunk
 
 
 class IngestionPipeline:
-    """Offline pipeline: loads documents, chunks them, and populates the stores."""
+    """Offline pipeline: loads and chunks documents, then writes the store and indexes.
 
-    def __init__(self, loader: BaseLoader, chunker: BaseChunker, stores: list[BaseStore]) -> None:
+    It is the write-side coordinator between the shared store (the chunk records) and
+    the indexes (ids + vectors/tokens): the store is written once, then every index is
+    told to index the same chunks. ``remove`` fans out the same way so a source is
+    dropped from every index and then from the store — no dangling ids, no orphans.
+    """
+
+    def __init__(
+        self, loader: BaseLoader, chunker: BaseChunker, store: BaseStore, indexes: list[BaseIndex]
+    ) -> None:
         self.loader = loader
         self.chunker = chunker
-        self.stores = stores
+        self.store = store
+        self.indexes = indexes
 
     def ingest(self) -> list[Chunk]:
-        """Loads and chunks documents, adding them to every store. Returns the chunks."""
         docs = self.loader.load()
         chunks = [chunk for doc in docs for chunk in self.chunker.chunk(doc)]
-        for store in self.stores:
-            store.add(chunks)
+        self.store.add(chunks)
+        for index in self.indexes:
+            index.insert(chunks)
         return chunks
+
+    def remove(self, source_id: str) -> None:
+        for index in self.indexes:
+            index.delete(source_id)
+        self.store.delete(source_id)
 
 
 class QueryPipeline:
-    """Online pipeline: searches the stores, fuses, optionally reranks, and generates."""
+    """Online pipeline: retrieves from the indexes, fuses, optionally reranks, and generates.
+
+    Each index resolves its own hits to chunks through the shared store, so retrieval is
+    a list of ``ScoredChunk`` lists that the fusion ranker merges (RRF/RSF).
+    """
 
     def __init__(
         self,
-        stores: list[BaseStore],
+        indexes: list[BaseIndex],
         ranker: FusionRanker,
         augmenter: BaseAugmenter,
         llm: BaseLLMClient,
+        top_i: int,
+        top_k: int,
+        top_n: int,
         reranker: Reranker | None = None,
-        top_k: int = 10,
     ) -> None:
-        self.stores = stores
+        self.indexes = indexes
         self.ranker = ranker
         self.augmenter = augmenter
         self.reranker = reranker
         self.llm = llm
-        self.top_k = top_k
+        self.top_i = top_i  # candidates pulled from each index
+        self.top_k = top_k  # results kept after fusion (fed to the reranker)
+        self.top_n = top_n  # results kept after reranking (final context)
 
-    def _retrieve(self, query: str, top_k: int) -> list[ScoredChunk]:
-        results = [store.search(query, top_k) for store in self.stores]
-        return self.ranker.rank(results, top_k)
-
-    def _rank(self, ranked: list[ScoredChunk], query: str, top_n: int | None) -> list[ScoredChunk]:
+    def retrieve(self, query: str) -> list[ScoredChunk]:
+        retrieved = [index.retrieve(query, self.top_i) for index in self.indexes]
+        fused = self.ranker.rank(retrieved, self.top_k)
         if self.reranker is not None:
-            return self.reranker.rank([sc.chunk for sc in ranked], query, top_n)
-        return ranked if top_n is None else ranked[:top_n]
+            context = self.reranker.rank([sc.chunk for sc in fused], query, self.top_n)
+        else:
+            context = fused[:self.top_n]
+        return context
 
-    def query(self, query: str, top_n: int | None = None) -> str:
-        ranked = self._retrieve(query, self.top_k)
-        reranked = self._rank(ranked, query, top_n)
-        messages = self.augmenter.build(query, reranked)
-        return self.llm.answer(messages)
+    def query(self, query: str) -> str:
+        context = self.retrieve(query)
+        prompt = self.augmenter.build(query, context)
+        return self.llm.answer(prompt)
 
-    def stream(self, query: str, top_n: int | None = None) -> Iterator[str]:
-        ranked = self._retrieve(query, self.top_k)
-        reranked = self._rank(ranked, query, top_n)
-        messages = self.augmenter.build(query, reranked)
-        yield from self.llm.stream(messages)
+    def stream(self, query: str) -> Iterator[str]:
+        context = self.retrieve(query)
+        prompt = self.augmenter.build(query, context)
+        yield from self.llm.stream(prompt)
 
 
 class RagPipeline:
-    """Collects the ingestion and query pipelines behind one object (facade)"""
+    """Collects the ingestion and query pipelines behind one object (facade).
+
+    Store and indexes are shared between the two: what the ingestion writes is exactly
+    what the query reads.
+    """
 
     def __init__(
         self,
         loader: BaseLoader,
         chunker: BaseChunker,
-        stores: list[BaseStore],
+        store: BaseStore,
+        indexes: list[BaseIndex],
         ranker: FusionRanker,
         augmenter: BaseAugmenter,
         llm: BaseLLMClient,
+        top_i: int,
+        top_k: int,
+        top_n: int,
         reranker: Reranker | None = None,
-        top_k: int = 10,
     ) -> None:
-        self.ingest_pipeline = IngestionPipeline(loader, chunker, stores)
-        self.query_pipeline = QueryPipeline(stores, ranker, augmenter, llm, reranker, top_k)
+        self.ingest_pipeline = IngestionPipeline(loader, chunker, store, indexes)
+        self.query_pipeline = QueryPipeline(
+            indexes, ranker, augmenter, llm, top_i, top_k, top_n, reranker
+        )

@@ -10,7 +10,7 @@ from autograph_rag.types import Language
 class Settings(BaseSettings):
     """Runtime configuration, read from environment variables or a .env file.
 
-    Field names map to upper-case env vars (e.g. vector_store_url -> VECTOR_STORE_URL).
+    Field names map to upper-case env vars (e.g. llm_url -> LLM_URL).
     Everything has a sensible local default, so an empty environment still works.
     """
 
@@ -27,11 +27,10 @@ class Settings(BaseSettings):
     # Embedding
     embed_model: str = "BAAI/bge-m3"
 
-    # Vector store (which tier to use is chosen in the entry point, not here)
-    vector_store_collection: str = "data"
-    vector_store_path: Path = Path("./data/db/vector")  # used by the persistent tier
-    vector_store_url: str | None = None  # used by the remote tier
-    vector_store_api_key: str | None = None  # used by the remote tier
+    # Retrieval
+    top_i: int = 20  # per-index retrieval depth (candidate pool fed to fusion)
+    top_k: int = 10  # results kept after fusion (candidates fed to the reranker)
+    top_n: int = 5  # results kept after reranking (final context sent to the LLM)
 
     # Ingestion paths
     in_dir: Path = Path("data/raw")

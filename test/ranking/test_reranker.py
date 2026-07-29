@@ -27,10 +27,10 @@ def test_reranker_orders_by_score():
     ranked = reranker.rank(_chunks(), "query")
     assert [r.chunk.id for r in ranked] == ["c0", "c2", "c1"]
 
-def test_reranker_top_k_returns_correct_chunks():
+def test_reranker_top_n_returns_correct_chunks():
     reranker = CrossReranker.__new__(CrossReranker)
     reranker.model = _FakeModel([0.9, 0.2, 0.7])
-    ranked = reranker.rank(_chunks(), "query", top_k=2)
+    ranked = reranker.rank(_chunks(), "query", top_n=2)
     assert len(ranked) == 2
     assert ranked[0].chunk.id == "c0"
     assert ranked[1].chunk.id == "c2"

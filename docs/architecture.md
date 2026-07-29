@@ -15,7 +15,7 @@ flowchart LR
 
     subgraph LOAD[" Loader "]
         direction TB
-        ldFs[" FileSystemLoader "]
+        ldFs[" FileLoader "]
         ldApi[" ApiLoader<br>(pull) "]
         ldFs ~~~ ldApi
     end
@@ -31,17 +31,20 @@ flowchart LR
     srcFs -- path --> ldFs
     srcGw -- RemoteDocument --> ldApi
     LOAD -- "convert_file / convert_stream" --> CONV
-    CONV -- Document --> n2[ Cleaner ]
-    n2 -- list[Document] --> C[" Chunker<br>(Hierarchical/Semantic/<br>Sentence/Fixed/Recursive) "]
+    CONV -- Document --> C[" Chunker<br>(Hierarchical/Semantic/<br>Sentence/Fixed/Recursive) "]
 
-    %% ramo vettoriale
+    %% dato dei chunk: scritto una volta sola nello store condiviso
+    C -- list[Chunk] --> S[" Store<br>(Volatile/Persistent/Remote) "]
+    S -- chunks --> DBc[( chunks )]
+
+    %% indici: solo id + rappresentazione, risolvono i chunk dallo store
     C -- list[Chunk] --> E[" Embedder<br>(Local/OpenAI) "]
-    E -- NDArray[float32] --> S[" VectorStore<br>(InMemory/Persistent/Remote) "]
-    S -- vectors --> DBv[( embeddings )]
-
-    %% ramo lessicale (parallelo; oggi BM25 in-memory, qui a simbolo)
-    C -- list[Chunk] --> L[" LexicalStore<br>(BM25) "]
-    L -- chunks --> DBc[( chunks )]
+    E -- NDArray[float32] --> IV[" SemanticIndex<br>(Qdrant, cosine) "]
+    IV -- "id + dense vector" --> DBv[( points )]
+    C -- list[Chunk] --> IL[" LexicalIndex<br>(Qdrant, BM25/IDF) "]
+    IL -- "id + sparse vector" --> DBs[( points )]
+    IV -.->|"store.get(ids)"| S
+    IL -.->|"store.get(ids)"| S
 
     srcFs:::io
     srcGw:::io
@@ -50,12 +53,13 @@ flowchart LR
     cvDocling:::step
     cvMarkit:::step
     cvText:::step
-    n2:::step
     C:::step
     E:::step
     S:::store
-    L:::store
+    IV:::store
+    IL:::store
     DBv:::db
+    DBs:::db
     DBc:::db
     SRC:::group
     LOAD:::group
@@ -72,9 +76,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    q[/"query"/] -->|"str"| BM["LexicalRetriever<br>(BM25)"] & VR["VectorRetriever<br>(FAISS/ChromaDB/Qdrant)"] & GR["GraphRetriever<br>(NetworkX/Neo4j)"]
+    q[/"query"/] -->|"str"| BM["LexicalIndex<br>(Qdrant, BM25/IDF)"] & VR["SemanticIndex<br>(Qdrant, cosine)"] & GR["GraphIndex<br>(previsto)"]
     q -- str --> AUG["PromptAugmenter"]
-    VR -- list[ScoredChunk] --> F["FusionRanker<br>(RRF/RSF)"]
+    VR -- list[ScoredChunk] --> F["FusionRanker<br>(RRF/RSF/DBSF)"]
     BM -- list[ScoredChunk] --> F
     GR -- list[ScoredChunk] --> F
     F -- list[ScoredChunk]<br> --> RR["Reranker<br>(CrossEncoder)"]
@@ -103,9 +107,9 @@ flowchart LR
 
 | Tipo | Campi |
 |---|---|
-| `Source` | `id` (=content_hash), `name`, `time` |
+| `Source` | `id` (nome file o `external_id`), `name`, `origin`, `time` |
 | `Document` | `text`, `source: Source` |
 | `Metadata` | `source: Source`, `title`, `page?` |
-| `Chunk` | `id`, `text`, `metadata: Metadata` |
+| `Chunk` | `id` (`source.id` + content_hash), `text`, `metadata: Metadata` |
 | `ScoredChunk` | `chunk: Chunk`, `score: float` |
 | `Message` | `role` (system/user/assistant), `content` |

@@ -14,6 +14,7 @@ class BaseRanker(ABC):
 
     @staticmethod
     def extract_top_k(scored_list: list[ScoredChunk], top_k: int | None) -> list[ScoredChunk]:
-        """Returns the top_k highest-scored chunks, or all if top_k is None."""
-        ordered = sorted(scored_list, key=lambda x: x.score, reverse=True)
+        """Returns the top_k highest-scored chunks, or all if top_k is None. Ties break on
+        chunk id, so the ranking doesn't depend on the order the chunks arrived in."""
+        ordered = sorted(scored_list, key=lambda x: (-x.score, x.chunk.id))
         return ordered if top_k is None else ordered[:top_k]

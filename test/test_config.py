@@ -20,11 +20,11 @@ def isolated_env(monkeypatch, tmp_path):
 def test_defaults(isolated_env):
     s = Settings()
     assert s.llm_url == "http://localhost:11434/api/chat"
-    assert s.vector_store_url is None
+    assert s.top_k == 10
     assert s.in_dir == Path("data/raw")
 
 
 def test_env_override(isolated_env, monkeypatch):
-    monkeypatch.setenv("VECTOR_STORE_URL", "http://localhost:6333")
+    monkeypatch.setenv("LLM_MODEL", "custom-model")
     s = Settings()
-    assert s.vector_store_url == "http://localhost:6333"
+    assert s.llm_model == "custom-model"
