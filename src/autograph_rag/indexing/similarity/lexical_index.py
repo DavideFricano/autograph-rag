@@ -6,12 +6,12 @@ from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Modifier, SparseVector, SparseVectorParams
 
-from autograph_rag.indexing.index import QdrantIndex
+from autograph_rag.indexing.similarity.base import SimilarityIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, Language
 
 
-class LexicalIndex(QdrantIndex):
+class LexicalIndex(SimilarityIndex):
     """Shared sparse (BM25) retrieval backed by Qdrant.
 
     Tokenizing, stemming and stopwords come from FastEmbed's ``Qdrant/bm25`` (language

@@ -4,8 +4,8 @@ from autograph_rag.augmentation.augmenter import PromptAugmenter
 from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import LocalEmbedder
 from autograph_rag.generation.llm import OllamaClient
-from autograph_rag.indexing.lexical_index import VolatileLexicalIndex
-from autograph_rag.indexing.semantic_index import VolatileSemanticIndex
+from autograph_rag.indexing.similarity.lexical_index import VolatileLexicalIndex
+from autograph_rag.indexing.similarity.semantic_index import VolatileSemanticIndex
 from autograph_rag.ingestion.chunker import HierarchicalChunker
 from autograph_rag.ingestion.loader import FileLoader
 from autograph_rag.pipeline import RagPipeline

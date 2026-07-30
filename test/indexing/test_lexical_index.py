@@ -1,6 +1,6 @@
 from datetime import date
 
-from autograph_rag.indexing.lexical_index import VolatileLexicalIndex
+from autograph_rag.indexing.similarity.lexical_index import VolatileLexicalIndex
 from autograph_rag.storing.store import VolatileStore
 from autograph_rag.types import Chunk, Language, Metadata, Origin, Source
 

@@ -6,12 +6,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
 from autograph_rag.embedding.embedder import BaseEmbedder
-from autograph_rag.indexing.index import QdrantIndex
+from autograph_rag.indexing.similarity.base import SimilarityIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk
 
 
-class SemanticIndex(QdrantIndex):
+class SemanticIndex(SimilarityIndex):
     """Shared dense-retrieval logic backed by Qdrant (cosine).
 
     Not used directly: the deployment-role classes below subclass it and differ only

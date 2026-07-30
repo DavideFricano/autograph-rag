@@ -3,13 +3,13 @@ from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import BaseEmbedder, LocalEmbedder, OpenAIEmbedder
 from autograph_rag.generation.llm import BaseLLMClient, OllamaClient, OpenAIClient
 from autograph_rag.indexing.index import BaseIndex
-from autograph_rag.indexing.lexical_index import (
+from autograph_rag.indexing.similarity.lexical_index import (
     LexicalIndex,
     PersistentLexicalIndex,
     RemoteLexicalIndex,
     VolatileLexicalIndex,
 )
-from autograph_rag.indexing.semantic_index import (
+from autograph_rag.indexing.similarity.semantic_index import (
     PersistentSemanticIndex,
     RemoteSemanticIndex,
     SemanticIndex,
