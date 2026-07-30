@@ -1,35 +1,23 @@
 from __future__ import annotations
 
-import uuid
+from typing import Any
 
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    FieldCondition,
-    Filter,
-    FilterSelector,
-    MatchValue,
-    Modifier,
-    PointStruct,
-    SparseVector,
-    SparseVectorParams,
-)
+from qdrant_client.models import Modifier, SparseVector, SparseVectorParams
 
-from autograph_rag.indexing.index import BaseIndex
+from autograph_rag.indexing.index import QdrantIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, Language
 
-_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 
-
-class LexicalIndex(BaseIndex):
+class LexicalIndex(QdrantIndex):
     """Shared sparse (BM25) retrieval backed by Qdrant.
 
     Tokenizing, stemming and stopwords come from FastEmbed's ``Qdrant/bm25`` (language
     aware); the corpus IDF is applied server-side by Qdrant's IDF modifier — so it is
-    real BM25, identical across tiers. Stores only ids + the sparse vector (payload =
-    chunk_id + source_id); chunks live in the shared Store. Role subclasses differ only
-    in how the ``db`` client is built.
+    real BM25, identical across tiers. Holds only ids + the sparse vector; chunks live
+    in the shared Store. Role subclasses differ only in how the ``db`` client is built.
     """
 
     def __init__(
@@ -39,9 +27,7 @@ class LexicalIndex(BaseIndex):
         collection: str = "lexical",
         language: Language = Language.ENGLISH,
     ) -> None:
-        super().__init__(store)
-        self.db = db
-        self.collection = collection
+        super().__init__(store, db, collection)
         self.model = SparseTextEmbedding("Qdrant/bm25", language=str(language))
         self._ready = False
 
@@ -62,37 +48,17 @@ class LexicalIndex(BaseIndex):
         self._ensure_collection()
         embeddings = self.model.embed([chunk.text for chunk in chunks])
         points = [
-            PointStruct(
-                id=str(uuid.uuid5(_NAMESPACE, chunk.id)),
-                vector={"text": SparseVector(indices=emb.indices.tolist(), values=emb.values.tolist())},
-                payload={"chunk_id": chunk.id, "source_id": chunk.metadata.source.id},
+            self._point(
+                chunk,
+                {"text": SparseVector(indices=emb.indices.tolist(), values=emb.values.tolist())},
             )
             for chunk, emb in zip(chunks, embeddings, strict=True)
         ]
         self.db.upsert(collection_name=self.collection, points=points)
 
-    def delete(self, source_id: str) -> None:
-        if not self.db.collection_exists(self.collection):
-            return
-        self.db.delete(
-            collection_name=self.collection,
-            points_selector=FilterSelector(
-                filter=Filter(must=[FieldCondition(key="source_id", match=MatchValue(value=source_id))])
-            ),
-        )
-
-    def _search(self, query: str, top_i: int) -> list[tuple[str, float]]:
-        if not self.db.collection_exists(self.collection):
-            return []
+    def _query_vector(self, query: str) -> tuple[Any, str | None]:
         emb = next(iter(self.model.query_embed(query)))
-        response = self.db.query_points(
-            collection_name=self.collection,
-            query=SparseVector(indices=emb.indices.tolist(), values=emb.values.tolist()),
-            using="text",
-            limit=top_i,
-            with_payload=True,
-        )
-        return [(hit.payload["chunk_id"], float(hit.score)) for hit in response.points]
+        return SparseVector(indices=emb.indices.tolist(), values=emb.values.tolist()), "text"
 
 
 class VolatileLexicalIndex(LexicalIndex):
