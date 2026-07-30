@@ -63,12 +63,19 @@ class Document(BaseModel):
     source: Source = Field(description="The document's source")
 
 
+AttributeValue = str | int | bool
+
+
 class Metadata(BaseModel):
     """Contextual metadata attached to a single chunk."""
 
     source: Source = Field(description="Source of this specific chunk")
     title: str = Field(description="Title of the document section the chunk was extracted from")
     page: int | None = Field(default=None, description="Optional page number")
+    access: dict[str, AttributeValue | list[AttributeValue]] = Field(
+        default_factory=dict,
+        description="Access attributes the policy filters on, keyed by declared name",
+    )
 
 
 class Chunk(BaseModel):
