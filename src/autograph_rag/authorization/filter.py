@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from autograph_rag.types import AttributeValue
@@ -57,3 +59,36 @@ class Not(Filter):
 
     def __init__(self, clause: Filter) -> None:
         super().__init__(clause=clause)
+
+
+def evaluate(
+    predicate: Filter, access: Mapping[str, AttributeValue | list[AttributeValue]]
+) -> bool:
+    """Whether these access attributes satisfy the predicate.
+
+    The reference semantics of the algebra: a backend that pushes a filter down must
+    agree with this, which makes it both the fallback for backends that cannot filter and
+    the oracle a pushdown is tested against. An attribute the chunk doesn't carry never
+    matches, so an unlabeled chunk is denied rather than allowed. Values are compared by
+    type as well, since ``bool`` subclasses ``int`` and ``True`` would otherwise satisfy a
+    filter asking for ``1``.
+    """
+    match predicate:
+        case Match(attribute=name, values=values):
+            if name not in access:
+                return False
+            held = access[name]
+            candidates = held if isinstance(held, list) else [held]
+            return any(
+                type(value) is type(candidate) and value == candidate
+                for candidate in candidates
+                for value in values
+            )
+        case And(clauses=clauses):
+            return all(evaluate(clause, access) for clause in clauses)
+        case Or(clauses=clauses):
+            return any(evaluate(clause, access) for clause in clauses)
+        case Not(clause=clause):
+            return not evaluate(clause, access)
+        case _:
+            raise ValueError(f"unsupported filter node: {type(predicate).__name__}")

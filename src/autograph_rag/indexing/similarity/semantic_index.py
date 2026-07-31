@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
 from autograph_rag.embedding.embedder import BaseEmbedder
-from autograph_rag.indexing.similarity.base import SimilarityIndex
+from autograph_rag.indexing.similarity.index import SimilarityIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk
 

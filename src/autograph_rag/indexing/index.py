@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from autograph_rag.authorization.filter import Filter, evaluate
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, ScoredChunk
 
@@ -41,7 +42,23 @@ class BaseIndex(ABC):
         Ids are unique — a chunk appears at most once, or fusion would count it twice.
         Not called directly: the public entry point is ``retrieve``."""
 
-    def retrieve(self, query: str, top_i: int) -> list[ScoredChunk]:
+    def retrieve(
+        self, query: str, top_i: int, filter: Filter | None = None
+    ) -> list[ScoredChunk]:
+        """Retrieve the authorized top ``top_i``, resolving chunks through the shared store.
+
+        The filter is applied here, before fusion: a ranker reads positions and score
+        spreads *within* each list, so leaving unauthorized chunks in would let them shift
+        the rank of authorized ones. Applying it here also keeps ``top_k`` meaning
+        authorized results. Subclasses may additionally push the filter into their backend
+        — this check stays regardless, so an index that ignores or mistranslates it cannot
+        leak, only return less.
+        """
         scored = self._search(query, top_i)
         by_id = {chunk.id: chunk for chunk in self.store.get([id_ for id_, _ in scored])}
-        return [ScoredChunk(chunk=by_id[id_], score=score) for id_, score in scored if id_ in by_id]
+        results = [
+            ScoredChunk(chunk=by_id[id_], score=score) for id_, score in scored if id_ in by_id
+        ]
+        if filter is None:
+            return results
+        return [sc for sc in results if evaluate(filter, sc.chunk.metadata.access)]
