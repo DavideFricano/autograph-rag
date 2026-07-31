@@ -5,13 +5,20 @@ Estende [l'architettura di base](architecture.md) su due assi: più **sorgenti**
 livello di **controllo accessi ABAC** che, dati gli attributi del richiedente, limita quali chunk
 sono raggiungibili in retrieval.
 
-## Stato (16 luglio 2026)
+## Stato (31 luglio 2026)
 
 - **Ingestion multi-source — nel base, implementata.** Filesystem locale + sorgenti remote in pull
   via `ApiLoader`, split `Loader` (acquisizione) / `Converter` (parsing). È già descritta in
   [architecture.md](architecture.md): questo doc non la ridisegna, ne fissa le decisioni e ciò che
   resta da fare.
-- **ABAC — visione futura, non ancora costruita.** È il grosso di questo documento.
+- **ABAC — fondamenta costruite, enforcement non ancora cablato.** Esistono il `Filter` neutro
+  (`authorization/filter.py`), la sua semantica di riferimento `evaluate()`, lo schema `AccessSchema`
+  dichiarato (`authorization/schema.py`) e il campo `Metadata.access`. `BaseIndex.retrieve` accetta un
+  filtro e lo applica. **Mancano** il `Labeler`, il PEP, e le due validazioni dello schema che non sono
+  agganciate a nessun confine — quindi oggi `Metadata.access` è un dict non vincolato.
+- **Store/index rifattorizzati** dopo la prima stesura di questo doc: il retriever non esiste più, i
+  dati del chunk stanno in un `Store` condiviso e gli index tengono solo id + rappresentazione. Le
+  parti di questo documento che dicono "lo store filtra" vanno lette come "l'index filtra".
 
 > Le prime stesure ipotizzavano FHIR *dentro* la libreria (`FhirLoader`, `RawResource`, Loader
 > Registry con `can_handle`) e un campo `attrs` ABAC nei tipi fin da subito. Superato: FHIR vive in un
@@ -23,7 +30,7 @@ Tre confini netti, ognuno un progetto/processo distinto:
 
 1. **`autograph-rag` (questa repo) — motore RAG + superficie-tool.** Resta una libreria in-process.
    L'estensione ABAC aggiunge una `search(query, top_k, filter=...) -> list[ScoredChunk]` **pubblica**:
-   è la superficie-tool e `filter` è la cucitura dove l'ABAC spinge il predicato nello store. Niente
+   è la superficie-tool e `filter` è la cucitura dove l'ABAC spinge il predicato negli index. Niente
    microservizio finché non serve.
 2. **ABAC — enforcement a livello dato.** Il **PDP** compila `(subject, action, env)` in un **filtro**,
    il **PEP** lo pusha nella ricerca (pre-filter, mai post-filter). Attributi del subject dall'identità
@@ -35,7 +42,7 @@ Tre confini netti, ognuno un progetto/processo distinto:
    injection.
 
 Filo conduttore — un solo confine ripetuto ovunque: 
-> chi decide il filtro sta a monte, chi lo applica sta nello store
+> chi decide il filtro sta a monte, chi lo applica sta negli index
 
 Vale identico per la query lineare e per l'agente; cambia solo che l'agente
 invoca il PEP a ogni passo.
@@ -76,10 +83,10 @@ flowchart LR
     end
     subgraph QRY["Query (online)"]
         SEARCH["search(query, filter)<br>tool surface"]:::step
-        BM["LexicalRetriever<br>(BM25)"]:::step
-        VR["VectorRetriever<br>(FAISS/ChromaDB/Qdrant)"]:::step
-        GR["GraphRetriever<br>(NetworkX/Neo4j)"]:::step
-        F["FusionRanker<br>(RRF/RSF)"]:::rank
+        BM["LexicalIndex<br>(BM25/IDF)"]:::step
+        VR["SemanticIndex<br>(cosine)"]:::step
+        GR["GraphIndex<br>(previsto)"]:::step
+        F["FusionRanker<br>(RRF/RSF/DBSF)"]:::rank
         RR["Reranker<br>(CrossEncoder)"]:::rank
         SEARCH --> BM
         SEARCH --> VR
@@ -89,8 +96,7 @@ flowchart LR
         GR --> F
         F --> RR
     end
-    VS["VectorStore"]:::store
-    LS["LexicalStore"]:::store
+    ST["Store<br>(dati del chunk, condiviso)"]:::store
     end
 
     subgraph STORE["Stores"]
@@ -112,14 +118,14 @@ flowchart LR
     user -->|"query + purpose"| LOOP
     LOOP -->|"tool call (per azione)"| PEP
     PEP -->|"search(query, filter)"| SEARCH
-    VR -->|"filtered"| VS
-    BM -->|"filtered"| LS
+    VR -.->|"store.get(ids)"| ST
+    BM -.->|"store.get(ids)"| ST
     RR -->|"authorized chunks"| LOOP
     LOOP -->|"answer"| answer
-    EMB -->|"NDArray[float32]"| VS
-    TAG -->|"chunks"| LS
-    VS --> VDB
-    LS --> RDB
+    TAG -->|"list[Chunk]"| ST
+    EMB -.->|"id + vector"| VR
+    ST --> RDB
+    VR --> VDB
 
     RAG:::group
     ING:::group
@@ -184,27 +190,39 @@ sul metadata del chunk**. Principio guida, ed è ciò che tiene sano tutto il re
 > **etichettare ≠ decidere.** Il Labeler marca il dato per *cosa è* (`Access`), non per *chi lo vede*. Le
 > regole vivono nel PDP; cambiare una regola non deve **mai** forzare un re-ingest/re-tag.
 
-Per questo l'unico contratto che ingestion e query condividono è lo schema `Access`, **non** una `Policy`:
+Per questo l'unico contratto che ingestion e query condividono è lo schema degli attributi, **non** una
+`Policy`. Lo schema però **non può essere fisso**: il vocabolario cambia per progetto (`tenant` in uno,
+`patient_id`/`care_team` in un altro, `cost_center` in un terzo), e quando gli attributi arrivano da uno
+script a monte del PDP i nomi li decide qualcun altro. Quindi è **dichiarato al composition root**:
 
 ```python
-class Classification(StrEnum):
-    PUBLIC = "public"; INTERNAL = "internal"; CONFIDENTIAL = "confidential"
+# authorization/schema.py — implementato
+class AttributeType(StrEnum):
+    KEYWORD = "keyword"; INTEGER = "integer"; BOOLEAN = "bool"   # = i tipi di payload index
 
-class Access(BaseModel):          # attributi-RISORSA, non regole
-    classification: Classification = Classification.CONFIDENTIAL   # default restrittivo (deny-friendly)
-    tenant: str | None = None
-    source_system: str | None = None
-    # patient_id, ... quando servono
+class Attribute(BaseModel):
+    name: str; type: AttributeType; multi: bool = False
 
-class Metadata(BaseModel):        # il gancio sul chunk
-    source: Source
-    title: str
-    page: int | None = None
-    access: Access = Field(default_factory=Access)
+class AccessSchema:               # il vocabolario chiuso che il deployment dichiara
+    def validate_access(self, access) -> dict: ...   # cosa il Labeler scrive, in ingestion
+    def validate_filter(self, predicate) -> None: ...# cosa il PEP passa, in query
+
+# types.py — implementato
+class Metadata(BaseModel):
+    source: Source; title: str; page: int | None = None
+    access: dict[str, AttributeValue | list[AttributeValue]] = {}
 ```
 
-Il default **più restrittivo** (`CONFIDENTIAL`) è voluto: un chunk non etichettato resta chiuso, coerente col
-default-deny. Il nome `Labeler` è in linea col resto della pipeline (`Loader/Converter/Cleaner/Chunker/Embedder`)
+**Una dichiarazione, tre consumatori**: valida ciò che il Labeler scrive, dice a ogni index quali campi
+payload indicizzare, e rifiuta un filtro che nomina un attributo mai dichiarato — così un attributo fuori
+vocabolario non ha alcun percorso silenzioso.
+
+Il **default-deny** non viene più da un valore restrittivo di default (`CONFIDENTIAL`) ma dalla semantica di
+`evaluate`: **un attributo che il chunk non porta non matcha mai**, quindi un chunk non etichettato è negato
+invece che leggibile da tutti. Stessa proprietà, meccanismo più generale — non richiede che lo schema
+conosca quale valore sia "il più chiuso".
+
+Il nome `Labeler` è in linea col resto della pipeline (`Loader/Converter/Cleaner/Chunker/Embedder`)
 e col lessico del controllo accessi (*security/classification label*): etichetta attributi, non policy.
 
 ### Da dove nascono i valori: propagati vs inferiti
@@ -231,8 +249,12 @@ Come per gli id (`content_hash`), il tag dev'essere **stabile per lo stesso cont
 re-ingestione non deve cambiare l'etichetta, o l'upsert idempotente dello store perde senso. È un altro motivo
 per preferire i valori *propagati* (deterministici) a quelli *inferiti* finché possibile.
 
-Lo `add()` dello store poi promuove `access` a **campi flat indicizzabili** — è il prerequisito del pushdown
-descritto sotto.
+Gli attributi vanno poi promossi a **campi flat indicizzabili** — ma **nell'index, non nello store**. Questa
+frase nella prima stesura diceva "lo `add()` dello store": era corretta quando "store" significava
+`VectorStore`/`LexicalStore`, cioè prima dello split store/index. Oggi lo store è un docstore chiave→blob
+interrogato *dopo* il retrieval, quindi filtrare lì sarebbe post-filtering; il pre-filtro può morde solo
+dove si scelgono i candidati, cioè nel payload dell'index (più un `create_payload_index` per campo, altrimenti
+il backend filtra scandendo). **Non ancora implementato.**
 
 ## Query con enforcement ABAC (target)
 
@@ -242,6 +264,26 @@ Principi non negoziabili:
   (post-filtrare rompe il top-k e fa leak di *esistenza*).
 - **L'LLM non è il confine di sicurezza**: vede solo chunk già autorizzati.
 - Ogni decisione è loggata (audit obbligatorio per compliance).
+
+**Precisazione su "pre" e "post"** (la prima stesura non distingueva, e il confine non è dove sembra): il
+riferimento è il **ranker**, non gli index.
+
+- Filtrare **prima della fusione** è corretto anche se avviene dopo `_search`. È dove sta oggi, in
+  `BaseIndex.retrieve`: i chunk sono già risolti dallo store, quindi non costa una query in più.
+- Filtrare **dopo la fusione** è ciò che va escluso, e per un motivo concreto: RRF legge le **posizioni**
+  dentro ogni lista e RSF normalizza su **min e max** di ogni lista. Lasciarci dentro chunk non autorizzati
+  significa che spostano il rank di quelli autorizzati e fissano i limiti di normalizzazione — cioè il
+  punteggio di ciò che vedi dipende da ciò che non puoi vedere. E `top_k` smetterebbe di contare risultati
+  autorizzati.
+
+Il controllo vive in `BaseIndex.retrieve` e non in `QueryPipeline` perché gli index sono **API pubblica**:
+un utente può chiamare `index.retrieve(query, top_i)` senza pipeline, e un controllo di sicurezza non può
+dipendere da quale wrapper è stato scelto. Stando nella classe base, nessun autore di index può ometterlo.
+
+**Il pattern industriale è a due stadi** e ci si incastra: pre-filtro grossolano sugli attributi indicizzabili
+(pushdown), **over-fetch**, e filtro fine contro il PDP per ciò che è troppo dinamico da indicizzare. È come
+lo fanno Azure AI Search (*security trimming*) ed Elasticsearch (*document-level security*). L'over-fetch è la
+risposta operativa al recall che si perde filtrando a valle di `top_i`.
 
 ```mermaid
 flowchart LR
@@ -254,8 +296,8 @@ flowchart LR
     PDP -- filter --> PEP
     q[/"query + attrs<br>"/] -->|"str + attrs"| PEP
     q -- str --> AUG["PromptAugmenter"]
-    PEP -->|"str + filter"| BM["LexicalRetriever<br>(BM25)"] & VR["VectorRetriever<br>(FAISS/ChromaDB/Qdrant)"] & GR["GraphRetriever<br>(NetworkX/Neo4j)"]
-    VR -- list[ScoredChunk] --> F["FusionRanker<br>(RRF/RSF)"]
+    PEP -->|"str + filter"| BM["LexicalIndex<br>(BM25/IDF)"] & VR["SemanticIndex<br>(cosine)"] & GR["GraphIndex<br>(previsto)"]
+    VR -- list[ScoredChunk] --> F["FusionRanker<br>(RRF/RSF/DBSF)"]
     BM -- list[ScoredChunk] --> F
     GR -- list[ScoredChunk] --> F
     F -- list[ScoredChunk]<br> --> RR["Reranker<br>(CrossEncoder)"]
@@ -334,7 +376,7 @@ Il nodo è *come* un PDP XACML restituisce un **filtro** invece di un Permit/Den
 > disponibile, la reverse-query. Un engine che fa *solo* Permit/Deny per-risorsa non consente il pre-filter.
 
 Flusso: il PEP manda `subject + action + env` (senza risorsa concreta, per la search) → la policy matcha →
-`Permit` + obligation `data-filter` → il PEP la traduce nel **`Filter` neutro** → pushdown nello store. L'audit
+`Permit` + obligation `data-filter` → il PEP la traduce nel **`Filter` neutro** → pushdown negli index. L'audit
 obbligatorio è **anch'esso un'obligation** (`must-log`), che convive nella stessa risposta.
 
 Le obligation XACML portano coppie `(AttributeId, Value)`, **non operatori**: l'operatore si codifica
@@ -368,19 +410,62 @@ come Deny — mai ignorata, sarebbe under-restriction.
 
 ### Il `Filter` neutro è il perno
 
-Grammatica piccola e chiusa (`eq` / `in` / `lte` / `and`), tradotta da ogni backend nel suo dialetto:
+Grammatica piccola e chiusa, **implementata** come algebra di predicati anziché come lista di condizioni in
+AND:
 
-- **Chroma** → `where` dict (`{"classification": {"$lte": "internal"}}`)
-- **Qdrant** → `models.Filter(must=[FieldCondition(...)])`
+```python
+Match(attribute, values)   # l'attributo vale uno di quei valori (copre eq e in)
+And(a, b, ...)             # rifiuta la congiunzione vuota: sarebbe vera per vacuità -> autorizza tutto
+Or(a, b, ...)
+Not(a)
+```
 
-Isola il resto da due assi: dal **backend** (Chroma↔Qdrant senza toccare PEP/PDP) e dal fatto che il **PDP sia
-Java/XACML** (si cambia engine senza toccare lo store). Prerequisito: `add()` deve scrivere gli attributi di
-`Access` come **campi flat indicizzabili**, non nel blob serializzato del chunk (com'è oggi), altrimenti non c'è
-nulla su cui filtrare.
+Rispetto alla prima stesura: `Or` e `Not` non erano previsti e ci sono; **`lte` non c'è**, quindi un
+`classification <= "internal"` oggi **non è esprimibile** e va espanso in `Match("classification", {"public",
+"internal"})`. Se le classificazioni ordinate diventano numerose vale aggiungere un operatore d'ordine, ma
+finché sono tre l'enumerazione è più semplice e non introduce il problema di dichiarare l'ordine nello schema.
 
-**Caveat FAISS:** l'`InMemoryVectorStore` (FAISS flat) **non filtra per metadata** — cercare i candidati e
-filtrarli dopo sarebbe post-filter. Quindi l'enforcement ABAC vive su **Chroma/Qdrant**; l'in-memory resta un
-PoC senza enforcement.
+`evaluate(predicate, access)` è la **semantica di riferimento** dell'algebra, e ha tre ruoli: è il fallback per
+i backend che non filtrano, è l'enforcement autorevole in `BaseIndex.retrieve`, e diventa l'**oracolo** contro
+cui testare ogni pushdown — un push deve dare lo stesso insieme che la valutazione in Python.
+
+La traduzione per backend resta il pushdown, come ottimizzazione: `models.Filter(must=[FieldCondition(...)])`
+per Qdrant. **Non ancora implementata.**
+
+Isola il resto da due assi: dal **backend** (si cambia motore senza toccare PEP/PDP) e dal fatto che il **PDP
+sia Java/XACML** (si cambia engine senza toccare l'index).
+
+**Il caveat FAISS è superato.** La prima stesura concludeva che un backend che non filtra per metadata non può
+fare enforcement, quindi l'in-memory restava un PoC. Non è più vero: con `evaluate` in `BaseIndex.retrieve`
+l'enforcement è in Python e vale per **qualunque** backend, compresi quelli scritti da terzi. Il pushdown
+cambia solo il recall e le prestazioni, non se il filtro c'è.
+
+### Aperto: l'ABAC sul `GraphIndex`
+
+Sui due index per similarità il filtro è una condizione sulla **selezione dei candidati**. Sul grafo no: il
+grafo espande per **traversal**, quindi il filtro interagisce con la *raggiungibilità* — il sottografo
+percorribile è diverso per ogni soggetto, e i cammini che esistono per uno non esistono per un altro.
+
+Il vincolo strutturale: un nodo-concetto mergiato per nome appartiene a **più chunk con accessi diversi**,
+quindi **non può portare una etichetta di accesso**. Gli archi sì: l'LLM estrae ciascun arco leggendo **un
+solo** chunk, quindi ogni arco ha una provenienza univoca. Da qui le due posizioni:
+
+- **Attributi sugli archi, filtro a ogni hop** (`all(e IN r WHERE ...)` in Cypher). Dà espansione
+  dimostrabilmente chiusa: il sottografo raggiunto deriva solo da dati che il soggetto può vedere. Prezzo: un
+  costrutto critico per la sicurezza, dove un errore è un leak silenzioso e la copertura con test è difficile.
+- **Traversal libero, filtro sui chunk risultanti** (posizione del CTO). Uniforme — gli attributi restano solo
+  sul chunk, un solo punto di filtro, testabile con una funzione — e nessuna duplicazione di dati di sicurezza
+  nel grafo, quindi nessun rischio di staleness.
+
+Cosa è realmente in gioco: **non un leak di contenuto**, perché `_search` restituisce solo `(chunk_id, score)`
+e i nodi intermedi non sono osservabili. È un **canale inferenziale**: un cammino che passa per chunk vietati
+può far risalire in classifica un chunk *autorizzato* che altrimenti non c'entrava, quindi l'ordinamento di ciò
+che vedi dipende da ciò che non vedi — e con molte query mirate diventa sondabile.
+
+**Da decidere prima di scrivere il grafo**, perché determina dove vanno gli attributi. E se si scegliesse la
+seconda, va aggiunto l'**over-fetch** e va annotato qui che il principio "mai post-filtering" è stato
+consapevolmente derogato per il solo stadio di espansione — dove costa bonus mancati, non risultati primari
+mancati.
 
 ### Il chatbot non decide l'autorizzazione
 
@@ -413,11 +498,14 @@ injection irrilevante ai fini dell'accesso: l'identità viaggia accanto alla too
 - **Filtro via obligation, non reverse-query**: gira su engine XACML standard/open-source (es. AuthzForce); il
   filtro è autorato nella policy come obligation, tradotto dal PEP nel `Filter` neutro. Obligation non gestita
   ⇒ Deny.
-- **`Filter` neutro come perno** (`eq`/`in`/`lte`/`and`): enforcement solo sui backend filtrabili
-  (Chroma/Qdrant), l'in-memory FAISS resta PoC; `add()` scrive gli attributi flat.
-- **Il legame ingestion↔query è lo schema attributi-risorsa (`Access` sul metadata) + il registro
-  obligation-id**, non una classe `Policy`; il `Labeler` resta policy-agnostico (etichetta *cosa è* il
-  dato, non *chi lo vede*).
+- **`Filter` neutro come perno**, come algebra `Match`/`And`/`Or`/`Not` (senza `lte`: le classificazioni
+  ordinate si enumerano). L'enforcement è **in Python** in `BaseIndex.retrieve` via `evaluate()`, quindi vale
+  per **ogni** backend — il pushdown nel payload dell'index resta un'ottimizzazione per il recall, non la
+  condizione perché il filtro esista.
+- **Il legame ingestion↔query è lo schema attributi-risorsa + il registro obligation-id**, non una classe
+  `Policy`; il `Labeler` resta policy-agnostico (etichetta *cosa è* il dato, non *chi lo vede*). Lo schema è
+  **dichiarato al composition root** (`AccessSchema`), non un modello fisso: il vocabolario cambia per
+  progetto e spesso lo decide chi sta a monte del PDP.
 - **Chatbot: rilevanza (LLM) ≠ autorizzazione (identità + scope fidato)**; due filtri composti, l'LLM può solo
   restringere.
 - **Multi-tenancy** *(futuro)*: singola collection + filtro; namespace/collection per tenant o tier di
@@ -430,12 +518,11 @@ injection irrilevante ai fini dell'accesso: l'identità viaggia accanto alla too
    neutro, `load()` con `yield` + skip-per-item. *No FTP, no policy engine, no `attrs`.*
 2. **Gateway FHIR (altra repo)** — servizio esterno che parla FHIR e alimenta la lib via `ApiLoader`.
    Cablaggio nella lib: aggiungere `gateway_url` a `Settings` e scegliere filesystem/gateway all'avvio.
-3. **ABAC hand-written (in-process)** — `Labeler` scrive `Access` sul metadata del chunk; `add()`
-   indicizza gli attributi flat; `search(query, top_k, filter)` pubblica con pushdown su Chroma/Qdrant; PDP
-   locale come **funzione** `compile_filter(subject, action, env) -> Filter` dietro l'interfaccia del PEP.
-   Enforcement solo sui backend filtrabili.
+3. **ABAC hand-written (in-process)** — ⚙️ *parzialmente fatto*: `Filter`, `evaluate()`, `AccessSchema` e
+   `Metadata.access` ci sono, e `BaseIndex.retrieve` applica il filtro. Restano: il `Labeler` che scrive gli
+   attributi (agganciando `validate_access`), il PEP con `compile_filter(subject, action, env) -> Filter`
+   (agganciando `validate_filter`), e il filtro propagato da `QueryPipeline`. L'enforcement vale già su ogni
+   backend; il pushdown nel payload è additivo e si aggiunge quando la **selettività misurata** lo richiede.
 4. **PDP XACML esterno (container)** — si sostituisce il `compile_filter` locale con l'hop al servizio XACML
    dietro la **stessa interfaccia**; il filtro arriva come **obligation** tradotta nel `Filter` neutro.
    Verificare il supporto obligation/reverse-query del motore. OPA/Cedar restano alternative.
-</content>
-</invoke>
