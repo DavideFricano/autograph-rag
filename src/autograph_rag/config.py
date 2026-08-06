@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Generation (Ollama endpoint by default)
     llm_url: str = "http://localhost:11434/api/chat"
     llm_model: str = "qwen2.5:7b"
-    system_prompt_path: Path = Path("prompts/system_prompt.md")
+    system_prompt_path: Path = Path("data/prompts/system_prompt.md")
 
     # Embedding
     embed_model: str = "BAAI/bge-m3"
