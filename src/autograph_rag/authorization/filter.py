@@ -13,9 +13,12 @@ class Filter(BaseModel):
     Not the vector backend's filter type — the policy engine's dialect and the backend's
     dialect both stay outside the library, so each index translates this into its own and
     nothing else has to know either.
+
+    Unknown keys are refused: a predicate may be deserialized from what the PDP returned,
+    and a field silently dropped there would quietly widen or narrow the authorization.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class Match(Filter):
@@ -61,6 +64,27 @@ class Not(Filter):
         super().__init__(clause=clause)
 
 
+class Allow(Filter):
+    """Everything is authorized: the explicit spelling of "no restriction".
+
+    Carries no field because it is the constant of the algebra — "no restriction" has no
+    parameters; the semantics live in ``evaluate`` and in each backend's translation,
+    which dispatch on the type. Same runtime effect as passing no filter at all, opposite
+    meaning to whoever reads the code or the audit log: ``None`` is an omission,
+    ``Allow()`` is a decision. It is what a deployment that declares an ``AccessSchema``
+    writes when a call genuinely has no restriction (a reindex job, an internal
+    evaluation), since there omitting the filter is refused. Its counterpart is the
+    canonical deny, a ``Match`` with no values.
+
+    That an empty ``And``/``Or`` is refused is not in tension with this: the objection
+    there was that authorizing the whole corpus must never happen *by accident*.
+
+    It waives the *policy*, not the schema's integrity: a chunk missing an attribute the
+    schema requires stays out even under ``Allow()``, because that check says the data
+    doesn't honour the declaration, not that the caller lacks a right.
+    """
+
+
 def evaluate(
     predicate: Filter, access: Mapping[str, AttributeValue | list[AttributeValue]]
 ) -> bool:
@@ -90,5 +114,7 @@ def evaluate(
             return any(evaluate(clause, access) for clause in clauses)
         case Not(clause=clause):
             return not evaluate(clause, access)
+        case Allow():
+            return True
         case _:
             raise ValueError(f"unsupported filter node: {type(predicate).__name__}")

@@ -15,13 +15,17 @@ from collections.abc import Iterator
 from datetime import date
 
 import numpy as np
+import pytest
 
 from autograph_rag.augmentation.augmenter import PromptAugmenter
+from autograph_rag.authorization.filter import Match
+from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 from autograph_rag.embedding.embedder import BaseEmbedder
 from autograph_rag.generation.llm import BaseLLMClient
 from autograph_rag.indexing.similarity.lexical_index import VolatileLexicalIndex
 from autograph_rag.indexing.similarity.semantic_index import VolatileSemanticIndex
 from autograph_rag.ingestion.chunker import BaseChunker
+from autograph_rag.ingestion.labeler import StaticLabeler
 from autograph_rag.ingestion.loader import BaseLoader
 from autograph_rag.pipeline import RagPipeline
 from autograph_rag.ranking.fusion_ranker import ReciprocalRankFusionRanker
@@ -201,3 +205,120 @@ def test_delete_fans_out_to_every_index_and_store():
     assert all(sc.chunk.metadata.source.id != "doc1" for sc in context)  # gone from the indices
     assert store.get(["c0"]) == []  # and the record was dropped from the store
     assert store.get(["c2"])  # doc2 is untouched
+
+
+# --- ABAC end to end: what the labeler writes at ingestion is what the filter reads -------
+
+_ABAC_SCHEMA = AccessSchema(
+    [Attribute(name="tenant", type=AttributeType.KEYWORD, required=True)]
+)
+
+
+class _SourceChunker(BaseChunker):
+    """One chunk per document, carrying the document's ``Source`` — the way the real
+    chunkers do, so whatever the labeler wrote reaches the chunk."""
+
+    def chunk(self, doc: Document) -> list[Chunk]:
+        metadata = Metadata(source=doc.source, title="S")
+        return [Chunk(id=f"{doc.source.id}:0", text=doc.text, metadata=metadata)]
+
+
+def _abac_pipeline(labeler: StaticLabeler | None) -> RagPipeline:
+    store = VolatileStore()
+    embedder = _FakeEmbedder(_TABLE, dim=2)
+    return RagPipeline(
+        loader=_FakeLoader(_DOCS),
+        labeler=labeler,
+        chunker=_SourceChunker(),
+        store=store,
+        indexes=[
+            VolatileSemanticIndex(store, embedder, schema=_ABAC_SCHEMA),
+            VolatileLexicalIndex(store, language=Language.ITALIAN, schema=_ABAC_SCHEMA),
+        ],
+        ranker=ReciprocalRankFusionRanker(),
+        augmenter=PromptAugmenter(system="S"),
+        llm=_CapturingLLM(),
+        top_i=10,
+        top_k=10,
+        top_n=10,
+    )
+
+
+def test_what_the_labeler_wrote_is_what_the_filter_matches():
+    """The whole round trip: the attributes are written once on the document's Source at
+    ingestion, ride into every chunk, and are read back by the enforcement at query time."""
+    rag = _abac_pipeline(StaticLabeler(_ABAC_SCHEMA, {"tenant": "acme"}))
+    rag.ingest_pipeline.ingest()
+
+    authorized = Match(attribute="tenant", values={"acme"})
+    results = [
+        index.retrieve("febbre", 10, filter=authorized)
+        for index in rag.query_pipeline.indexes
+    ]
+    assert all(hits for hits in results)
+    assert all(sc.chunk.metadata.source.access == {"tenant": "acme"} for hits in results for sc in hits)
+
+    other_tenant = Match(attribute="tenant", values={"globex"})
+    assert all(
+        index.retrieve("febbre", 10, filter=other_tenant) == []
+        for index in rag.query_pipeline.indexes
+    )
+
+
+def test_an_ingestion_without_a_labeler_produces_nothing_retrievable():
+    """The schema is declared but nothing labels, so every chunk misses the required
+    attribute and is denied — the corpus is unreachable rather than wide open."""
+    rag = _abac_pipeline(labeler=None)
+    assert rag.ingest_pipeline.ingest()  # the chunks are indexed...
+
+    authorized = Match(attribute="tenant", values={"acme"})
+    assert all(
+        index.retrieve("febbre", 10, filter=authorized) == []
+        for index in rag.query_pipeline.indexes
+    )  # ...but none of them can be retrieved
+
+
+def test_the_pipeline_carries_the_filter_down_to_every_index():
+    """The propagation is the whole feature: what the caller passes reaches the indexes
+    untouched, and the enforcement there is what shapes the result."""
+    rag = _abac_pipeline(StaticLabeler(_ABAC_SCHEMA, {"tenant": "acme"}))
+    rag.ingest_pipeline.ingest()
+
+    authorized = rag.query_pipeline.retrieve("febbre", Match(attribute="tenant", values={"acme"}))
+    denied = rag.query_pipeline.retrieve("febbre", Match(attribute="tenant", values={"globex"}))
+
+    assert authorized
+    assert denied == []
+
+
+def test_querying_an_abac_pipeline_without_a_filter_is_refused():
+    """QueryPipeline does not re-implement the rule — it lets the index raise, so there is
+    a single place where 'a declared schema means a mandatory filter' is decided."""
+    rag = _abac_pipeline(StaticLabeler(_ABAC_SCHEMA, {"tenant": "acme"}))
+    rag.ingest_pipeline.ingest()
+
+    with pytest.raises(ValueError, match="requires a filter"):
+        rag.query_pipeline.retrieve("febbre")
+
+
+def test_the_filter_reaches_generation_too():
+    """query/stream retrieve through the same path, so an unauthorized chunk never gets
+    near the prompt: the LLM only ever sees context that was already authorized."""
+    rag = _abac_pipeline(StaticLabeler(_ABAC_SCHEMA, {"tenant": "acme"}))
+    rag.ingest_pipeline.ingest()
+    llm = rag.query_pipeline.llm
+
+    # _C1 marks the retrieved text: unlike "febbre" it cannot come from the question itself
+    rag.query_pipeline.query("febbre", Match(attribute="tenant", values={"globex"}))
+    assert _C1 not in llm.last_messages[-1].content  # no chunk survived the filter
+
+    rag.query_pipeline.query("febbre", Match(attribute="tenant", values={"acme"}))
+    assert _C1 in llm.last_messages[-1].content
+
+
+def test_without_a_schema_the_pipeline_keeps_working_unfiltered():
+    """The simple deployment is untouched: no schema, no filter, everything retrievable."""
+    rag, _, _ = _build(top_i=10, top_k=10, top_n=10)
+    rag.ingest_pipeline.ingest()
+
+    assert rag.query_pipeline.retrieve("febbre")

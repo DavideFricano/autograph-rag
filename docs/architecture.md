@@ -107,7 +107,7 @@ flowchart LR
 
 | Tipo | Campi |
 |---|---|
-| `Source` | `id` (nome file o `external_id`), `name`, `origin`, `time` |
+| `Source` | `id` (nome file o `external_id`), `name`, `origin`, `time`, `access` (attributi ABAC, vuoto senza schema) |
 | `Document` | `text`, `source: Source` |
 | `Metadata` | `source: Source`, `title`, `page?` |
 | `Chunk` | `id` (`source.id` + content_hash), `text`, `metadata: Metadata` |

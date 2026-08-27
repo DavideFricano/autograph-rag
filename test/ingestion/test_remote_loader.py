@@ -13,7 +13,7 @@ def _item(**overrides):
         "media_type": "text/plain",
         "external_id": "doc-1",
         "title": "referto.pdf",
-        "ingested_at": "2026-07-13",
+        "time": "2026-07-13",
     }
     base.update(overrides)
     return base
@@ -61,7 +61,7 @@ def test_load_is_tolerant_to_unknown_fields():
 
 
 def test_load_skips_malformed_records():
-    incomplete = {"external_id": "x", "title": "t", "ingested_at": "2026-07-13"}  # no data/media_type
+    incomplete = {"external_id": "x", "title": "t", "time": "2026-07-13"}  # no data/media_type
 
     docs = list(_FakeRemoteLoader([incomplete, _item()]).load())
 
@@ -122,3 +122,45 @@ def test_api_loader_accepts_bare_list_payload(monkeypatch):
     docs = list(ApiLoader("https://gw.example").load())
 
     assert {d.source.id for d in docs} == {"doc-1", "doc-2"}
+
+
+# --- access attributes the service knows and the library cannot infer ---
+
+def test_access_attributes_travel_into_the_source():
+    """What the gateway knows about a record — patient, classification, care team — is
+    what the library could never derive from the bytes, so it is carried across and lands
+    on the document's Source, where every chunk will inherit it."""
+    loader = _FakeRemoteLoader(
+        [_item(access={"tenant": "asl-01", "patient_id": "P-4821", "care_team": ["cardiology"]})]
+    )
+
+    [doc] = list(loader.load())
+
+    assert doc.source.access == {
+        "tenant": "asl-01",
+        "patient_id": "P-4821",
+        "care_team": ["cardiology"],
+    }
+
+
+def test_a_record_without_access_yields_an_unlabeled_source():
+    """No attributes is not an error here: whether that is acceptable is decided by the
+    schema at labeling time, and by `required` at retrieval."""
+    [doc] = list(_FakeRemoteLoader([_item()]).load())
+    assert doc.source.access == {}
+
+
+def test_the_service_cannot_claim_the_origin():
+    """`origin` is set by the loader, not read from the payload: which channel a document
+    came through is something the library knows, and a service must not be able to say
+    otherwise — even by sending the field."""
+    [doc] = list(_FakeRemoteLoader([_item(origin="local")]).load())
+    assert doc.source.origin is Origin.REMOTE
+
+
+def test_access_is_carried_verbatim_not_validated_here():
+    """The loader transports, it does not check: an attribute nobody declared is refused
+    by the labeler, which is the boundary that knows the vocabulary. Keeping the loader
+    ignorant of it is what stops every loader from depending on the access schema."""
+    [doc] = list(_FakeRemoteLoader([_item(access={"non_dichiarato": "x"})]).load())
+    assert doc.source.access == {"non_dichiarato": "x"}

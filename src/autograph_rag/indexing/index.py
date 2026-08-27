@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from autograph_rag.authorization.filter import Filter, evaluate
+from autograph_rag.authorization.schema import AccessSchema
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, ScoredChunk
 
@@ -21,10 +22,15 @@ class BaseIndex(ABC):
 
     Stays free of any backend import, so the similarity family and the relation family
     inherit nothing engine-specific from here.
+
+    An optional ``schema`` says whether this deployment does ABAC at all. Without one the
+    index behaves as it always has: a filter is accepted if given, and omitting it returns
+    everything. With one, retrieval without a filter is refused — see ``retrieve``.
     """
 
-    def __init__(self, store: BaseStore) -> None:
+    def __init__(self, store: BaseStore, schema: AccessSchema | None = None) -> None:
         self.store = store
+        self.schema = schema
 
     @abstractmethod
     def insert(self, chunks: list[Chunk]) -> None:
@@ -53,7 +59,21 @@ class BaseIndex(ABC):
         authorized results. Subclasses may additionally push the filter into their backend
         — this check stays regardless, so an index that ignores or mistranslates it cannot
         leak, only return less.
+
+        When the deployment declared a schema, omitting the filter is refused rather than
+        read as "everything": there the safe default cannot be inferred, and forgetting an
+        argument must not be spelled the same way as deciding there is no restriction —
+        which is what ``Allow()`` is for. A chunk that doesn't carry the required
+        attributes is dropped before the predicate runs, so an unlabeled chunk stays denied
+        even under a predicate a missing attribute would otherwise satisfy (``Not``).
         """
+        if self.schema is not None:
+            if filter is None:
+                raise ValueError(
+                    "this index declares an access schema, so retrieve requires a filter; "
+                    "pass Allow() to state explicitly that the call has no restriction"
+                )
+            self.schema.validate_filter(filter)
         scored = self._search(query, top_i)
         by_id = {chunk.id: chunk for chunk in self.store.get([id_ for id_, _ in scored])}
         results = [
@@ -61,4 +81,9 @@ class BaseIndex(ABC):
         ]
         if filter is None:
             return results
-        return [sc for sc in results if evaluate(filter, sc.chunk.metadata.access)]
+        return [
+            sc
+            for sc in results
+            if (self.schema is None or self.schema.is_labeled(sc.chunk.metadata.source.access))
+            and evaluate(filter, sc.chunk.metadata.source.access)
+        ]

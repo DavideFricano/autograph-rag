@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from autograph_rag.authorization.filter import And, Filter, Match, Not, Or, evaluate
+from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or, evaluate
 
 
 def test_nested_clauses_keep_their_concrete_type():
@@ -101,6 +101,22 @@ def test_nested_tree_is_walked_fully():
         Not(Match(attribute="classification", values={"confidential"})),
     )
     assert evaluate(predicate, access) is True
+
+
+def test_allow_is_the_constant_true():
+    """The counterpart of the canonical deny: it holds whatever the chunk carries, so a
+    caller that has no restriction can say so instead of omitting the argument."""
+    assert evaluate(Allow(), {}) is True
+    assert evaluate(Allow(), {"tenant": "acme"}) is True
+    assert evaluate(Not(Allow()), {"tenant": "acme"}) is False
+
+
+def test_allow_takes_no_argument():
+    """It is the constant of the algebra: no attribute, no values, nothing to configure —
+    which is also why two of them are interchangeable."""
+    assert Allow() == Allow()
+    with pytest.raises(ValidationError):
+        Allow(attribute="tenant")
 
 
 def test_unknown_node_raises_instead_of_defaulting():

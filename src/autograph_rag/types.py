@@ -11,6 +11,9 @@ def content_hash(text: str, length: int = 32) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 
 
+AttributeValue = str | int | bool
+
+
 class RemoteDocument(BaseModel):
     """The neutral raw payload the remote service guarantees.
 
@@ -18,6 +21,13 @@ class RemoteDocument(BaseModel):
     markdown, decode, ...) is the RAG side's job, so a single conversion path serves
     both filesystem and remote sources. Binary payloads travel base64-encoded in JSON
     and are decoded to real bytes on validation.
+
+    ``access`` is what the service knows and the library cannot infer from bytes — which
+    patient a record belongs to, how it is classified, who may be its care team. It is
+    nested rather than flat because its keys come from the deployment's access schema
+    while the fields around it are this transport's own: keeping the two namespaces apart
+    means a newly declared attribute can never collide with the envelope. The service must
+    speak that vocabulary; an attribute nobody declared stops the ingestion at the labeler.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -26,7 +36,11 @@ class RemoteDocument(BaseModel):
     media_type: str = Field(description="IANA media type of the payload, e.g. application/pdf")
     external_id: str = Field(description="Stable id from the source system")
     title: str = Field(description="Human-readable document name")
-    ingested_at: date = Field(description="When the service ingested the document")
+    time: date = Field(description="When the service ingested the document")
+    access: dict[str, AttributeValue | list[AttributeValue]] = Field(
+        default_factory=dict,
+        description="Access attributes the service knows, keyed by declared name",
+    )
 
 
 class Origin(StrEnum):
@@ -48,12 +62,16 @@ class Language(StrEnum):
 
 
 class Source(BaseModel):
-    """Identifies the origin document of a chunk."""
+    """Identifies the origin document of a chunk, and carries what it grants access to."""
 
     id: str = Field(description="Stable identifier of the document")
     name: str = Field(description="Name of the data source")
     origin: Origin = Field(description="Acquisition channel the document came from")
     time: date = Field(description="Date the source was loaded")
+    access: dict[str, AttributeValue | list[AttributeValue]] = Field(
+        default_factory=dict,
+        description="Access attributes the policy filters on, keyed by declared name",
+    )
 
 
 class Document(BaseModel):
@@ -63,19 +81,12 @@ class Document(BaseModel):
     source: Source = Field(description="The document's source")
 
 
-AttributeValue = str | int | bool
-
-
 class Metadata(BaseModel):
     """Contextual metadata attached to a single chunk."""
 
-    source: Source = Field(description="Source of this specific chunk")
     title: str = Field(description="Title of the document section the chunk was extracted from")
+    source: Source = Field(description="Source of this specific chunk")
     page: int | None = Field(default=None, description="Optional page number")
-    access: dict[str, AttributeValue | list[AttributeValue]] = Field(
-        default_factory=dict,
-        description="Access attributes the policy filters on, keyed by declared name",
-    )
 
 
 class Chunk(BaseModel):

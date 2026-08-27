@@ -5,6 +5,7 @@ from typing import Any
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
+from autograph_rag.authorization.schema import AccessSchema
 from autograph_rag.embedding.embedder import BaseEmbedder
 from autograph_rag.indexing.similarity.index import SimilarityIndex
 from autograph_rag.storing.store import BaseStore
@@ -21,9 +22,14 @@ class SemanticIndex(SimilarityIndex):
     """
 
     def __init__(
-        self, store: BaseStore, embedder: BaseEmbedder, db: QdrantClient, collection: str
+        self,
+        store: BaseStore,
+        embedder: BaseEmbedder,
+        db: QdrantClient,
+        collection: str,
+        schema: AccessSchema | None = None,
     ) -> None:
-        super().__init__(store, db, collection)
+        super().__init__(store, db, collection, schema)
         self.embedder = embedder
         self.dim: int | None = None
 
@@ -54,8 +60,14 @@ class SemanticIndex(SimilarityIndex):
 class VolatileSemanticIndex(SemanticIndex):
     """Dense index in an in-memory Qdrant instance. Non-durable; zero setup."""
 
-    def __init__(self, store: BaseStore, embedder: BaseEmbedder, collection: str = "semantic") -> None:
-        super().__init__(store, embedder, QdrantClient(location=":memory:"), collection)
+    def __init__(
+        self,
+        store: BaseStore,
+        embedder: BaseEmbedder,
+        collection: str = "semantic",
+        schema: AccessSchema | None = None,
+    ) -> None:
+        super().__init__(store, embedder, QdrantClient(location=":memory:"), collection, schema)
 
 
 class PersistentSemanticIndex(SemanticIndex):
@@ -67,8 +79,9 @@ class PersistentSemanticIndex(SemanticIndex):
         embedder: BaseEmbedder,
         path: str = "./data/qdrant/semantic",
         collection: str = "semantic",
+        schema: AccessSchema | None = None,
     ) -> None:
-        super().__init__(store, embedder, QdrantClient(path=path), collection)
+        super().__init__(store, embedder, QdrantClient(path=path), collection, schema)
 
 
 class RemoteSemanticIndex(SemanticIndex):
@@ -80,6 +93,9 @@ class RemoteSemanticIndex(SemanticIndex):
         embedder: BaseEmbedder,
         url: str,
         collection: str = "semantic",
+        schema: AccessSchema | None = None,
         **client_kwargs,
     ) -> None:
-        super().__init__(store, embedder, QdrantClient(url=url, **client_kwargs), collection)
+        super().__init__(
+            store, embedder, QdrantClient(url=url, **client_kwargs), collection, schema
+        )

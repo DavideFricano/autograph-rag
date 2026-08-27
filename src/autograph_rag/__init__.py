@@ -1,4 +1,6 @@
 from autograph_rag.augmentation.augmenter import BaseAugmenter, PromptAugmenter
+from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or, evaluate
+from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import BaseEmbedder, LocalEmbedder, OpenAIEmbedder
 from autograph_rag.generation.llm import BaseLLMClient, OllamaClient, OpenAIClient
@@ -25,6 +27,12 @@ from autograph_rag.ingestion.chunker import (
 )
 from autograph_rag.ingestion.cleaner import Cleaner
 from autograph_rag.ingestion.converter import BaseConverter, MarkdownConverter
+from autograph_rag.ingestion.labeler import (
+    BaseLabeler,
+    ManifestLabeler,
+    PropagatingLabeler,
+    StaticLabeler,
+)
 from autograph_rag.ingestion.loader import (
     ApiLoader,
     BaseLoader,
@@ -56,13 +64,19 @@ from autograph_rag.types import (
 )
 
 __all__ = [
+    "AccessSchema",
+    "Allow",
+    "And",
     "ApiLoader",
+    "Attribute",
+    "AttributeType",
     "BaseAugmenter",
     "BaseChunker",
     "BaseConverter",
     "BaseEmbedder",
     "BaseIndex",
     "BaseLLMClient",
+    "BaseLabeler",
     "BaseLoader",
     "BaseRanker",
     "BaseStore",
@@ -72,6 +86,7 @@ __all__ = [
     "DistributionScoreFusionRanker",
     "Document",
     "FileLoader",
+    "Filter",
     "FixedSizeChunker",
     "FusionRanker",
     "HierarchicalChunker",
@@ -80,17 +95,22 @@ __all__ = [
     "LexicalIndex",
     "LocalEmbedder",
     "LocalLoader",
+    "ManifestLabeler",
     "MarkdownConverter",
+    "Match",
     "Message",
     "Metadata",
+    "Not",
     "OllamaClient",
     "OpenAIClient",
     "OpenAIEmbedder",
+    "Or",
     "Origin",
     "PersistentLexicalIndex",
     "PersistentSemanticIndex",
     "PersistentStore",
     "PromptAugmenter",
+    "PropagatingLabeler",
     "QueryPipeline",
     "RagPipeline",
     "ReciprocalRankFusionRanker",
@@ -109,7 +129,9 @@ __all__ = [
     "SentenceChunker",
     "Settings",
     "Source",
+    "StaticLabeler",
     "VolatileLexicalIndex",
     "VolatileSemanticIndex",
     "VolatileStore",
+    "evaluate",
 ]

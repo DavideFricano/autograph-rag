@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from autograph_rag.authorization.filter import And, Filter, Match, Not, Or
+from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or
 from autograph_rag.types import AttributeValue
 
 
@@ -25,13 +27,22 @@ _PYTHON_TYPE: dict[AttributeType, type] = {
 
 
 class Attribute(BaseModel):
-    """One declared access attribute."""
+    """One declared access attribute.
 
-    model_config = ConfigDict(frozen=True)
+    Unknown keys are refused rather than ignored: the declaration is read from a file, so
+    a typo (``requird``) would otherwise leave the attribute optional while its author
+    believes it mandatory — an error that fails open.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(description="Payload field name the attribute is indexed under")
     type: AttributeType = Field(description="Value type the attribute accepts")
     multi: bool = Field(default=False, description="Whether a chunk may carry several values")
+    required: bool = Field(
+        default=False,
+        description="Whether every chunk must carry it; one that doesn't is never authorized",
+    )
 
 
 class AccessSchema:
@@ -40,13 +51,45 @@ class AccessSchema:
     One declaration, three consumers: it validates what the labeler writes at ingestion,
     tells each index which payload fields to index, and rejects a filter naming an
     attribute nobody declared — so an undeclared attribute has no silent path through.
+
+    Whether one exists is also what tells a deployment apart: no schema means no ABAC (no
+    labeling, no filtering, everything retrievable), a schema means the labeler must write
+    conforming attributes and every retrieval must carry a filter. Which is why an empty
+    vocabulary is refused: it would claim ABAC while making every filter invalid.
     """
 
     def __init__(self, attributes: Sequence[Attribute]) -> None:
         self.attributes = tuple(attributes)
         self._by_name = {attribute.name: attribute for attribute in self.attributes}
+        if not self.attributes:
+            raise ValueError("the access schema declares no attribute")
         if len(self._by_name) != len(self.attributes):
             raise ValueError("duplicate attribute name in the access schema")
+
+    @classmethod
+    def from_file(cls, path: Path | str) -> AccessSchema:
+        """Load the declaration from a JSON list of attributes.
+
+        Ingestion and query are separate pipelines and may run as separate processes, so
+        the two ends cannot share one object: what makes the contract hold is that both
+        read *the same declaration*. Keeping it a file — versioned, reviewed like code —
+        is what turns that from a coincidence into something checkable.
+        """
+        declared = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(declared, list):
+            raise ValueError(f"the access schema must be a JSON list of attributes: {path}")
+        return cls([Attribute.model_validate(item) for item in declared])
+
+    def is_labeled(self, access: Mapping[str, object]) -> bool:
+        """Whether these access attributes carry every attribute the schema requires.
+
+        Separate from ``evaluate`` on purpose: it makes default-deny a property of the
+        enforcement point rather than of how the policy happens to be written. Under a
+        bare ``Not(Match(...))`` a missing attribute *satisfies* the predicate, so an
+        unlabeled chunk would pass — checking this first closes that door for every
+        predicate, without the algebra having to know about labeling.
+        """
+        return all(attribute.name in access for attribute in self.attributes if attribute.required)
 
     def attribute(self, name: str) -> Attribute:
         """The declared attribute under ``name``; an undeclared name never passes."""
@@ -81,6 +124,8 @@ class AccessSchema:
                     self.validate_filter(clause)
             case Not(clause=clause):
                 self.validate_filter(clause)
+            case Allow():
+                pass  # no attribute to check: the constant carries no vocabulary
             case _:
                 raise ValueError(f"unsupported filter node: {type(predicate).__name__}")
 

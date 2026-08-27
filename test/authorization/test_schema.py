@@ -1,6 +1,9 @@
-import pytest
+import json
 
-from autograph_rag.authorization.filter import And, Match, Not, Or
+import pytest
+from pydantic import ValidationError
+
+from autograph_rag.authorization.filter import Allow, And, Match, Not, Or
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 
 
@@ -14,6 +17,84 @@ def _schema() -> AccessSchema:
             Attribute(name="exportable", type=AttributeType.BOOLEAN),
         ]
     )
+
+
+def _write(tmp_path, text: str) -> str:
+    """Write the declaration verbatim, as a person editing the file would — so the tests
+    below pin the on-disk format itself, not a round-trip through ``json.dumps``."""
+    path = tmp_path / "access_schema.json"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def test_declaration_is_loaded_from_a_json_file(tmp_path):
+    """Ingestion and query may be separate processes, so what makes the contract hold is
+    that both read the same declaration — not that they share an object."""
+    path = _write(
+        tmp_path,
+        """
+        [
+          { "name": "tenant", "type": "keyword", "required": true },
+          { "name": "care_team", "type": "keyword", "multi": true }
+        ]
+        """,
+    )
+    schema = AccessSchema.from_file(path)
+    assert [attribute.name for attribute in schema.attributes] == ["tenant", "care_team"]
+    assert schema.attribute("tenant").required is True
+    assert schema.attribute("care_team").multi is True
+
+
+def test_a_typo_in_the_declaration_is_refused(tmp_path):
+    """The reason unknown keys are forbidden: 'requird' would be dropped in silence and
+    leave the attribute optional while its author believes it mandatory — failing open."""
+    path = _write(tmp_path, '[{ "name": "tenant", "type": "keyword", "requird": true }]')
+    with pytest.raises(ValidationError):
+        AccessSchema.from_file(path)
+
+
+def test_attributes_are_not_required_unless_declared_so():
+    assert Attribute(name="tenant", type=AttributeType.KEYWORD).required is False
+
+
+def test_a_declaration_that_is_not_a_list_is_refused(tmp_path):
+    path = _write(tmp_path, '{ "attributes": [{ "name": "tenant", "type": "keyword" }] }')
+    with pytest.raises(ValueError, match="JSON list"):
+        AccessSchema.from_file(path)
+
+
+def test_a_malformed_file_fails_at_load_time(tmp_path):
+    """The file is hand-edited, so a stray comma is a realistic way to break it. It must
+    stop the process at startup, not leave a half-built vocabulary behind."""
+    path = _write(tmp_path, '[{ "name": "tenant", "type": "keyword" },]')
+    with pytest.raises(json.JSONDecodeError):
+        AccessSchema.from_file(path)
+
+
+def test_an_empty_vocabulary_is_refused():
+    """It would claim the deployment does ABAC — filter mandatory — while making every
+    filter invalid, since no attribute name would be declared."""
+    with pytest.raises(ValueError, match="no attribute"):
+        AccessSchema([])
+
+
+def test_is_labeled_asks_only_for_the_required_attributes():
+    schema = AccessSchema(
+        [
+            Attribute(name="tenant", type=AttributeType.KEYWORD, required=True),
+            Attribute(name="classification", type=AttributeType.KEYWORD),
+        ]
+    )
+    assert schema.is_labeled({"tenant": "acme"}) is True
+    assert schema.is_labeled({"tenant": "acme", "classification": "public"}) is True
+    assert schema.is_labeled({"classification": "public"}) is False
+    assert schema.is_labeled({}) is False
+
+
+def test_validate_filter_accepts_the_constant():
+    """Allow names no attribute, so there is no vocabulary to check it against."""
+    assert _schema().validate_filter(Allow()) is None
+    assert _schema().validate_filter(And(Allow(), Match(attribute="tenant", values={"acme"}))) is None
 
 
 def test_duplicate_declaration_is_refused():

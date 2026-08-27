@@ -6,6 +6,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from autograph_rag.authorization.schema import AccessSchema
 from autograph_rag.indexing.index import BaseIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk
@@ -23,8 +24,14 @@ class SimilarityIndex(BaseIndex, ABC):
     drift apart. The engine never appears in the public signatures.
     """
 
-    def __init__(self, store: BaseStore, db: QdrantClient, collection: str) -> None:
-        super().__init__(store)
+    def __init__(
+        self,
+        store: BaseStore,
+        db: QdrantClient,
+        collection: str,
+        schema: AccessSchema | None = None,
+    ) -> None:
+        super().__init__(store, schema)
         self.db = db
         self.collection = collection
 

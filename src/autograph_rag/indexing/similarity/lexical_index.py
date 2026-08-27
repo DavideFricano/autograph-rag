@@ -6,6 +6,7 @@ from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Modifier, SparseVector, SparseVectorParams
 
+from autograph_rag.authorization.schema import AccessSchema
 from autograph_rag.indexing.similarity.index import SimilarityIndex
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, Language
@@ -26,8 +27,9 @@ class LexicalIndex(SimilarityIndex):
         db: QdrantClient,
         collection: str = "lexical",
         language: Language = Language.ENGLISH,
+        schema: AccessSchema | None = None,
     ) -> None:
-        super().__init__(store, db, collection)
+        super().__init__(store, db, collection, schema)
         self.model = SparseTextEmbedding("Qdrant/bm25", language=str(language))
         self._ready = False
 
@@ -65,9 +67,13 @@ class VolatileLexicalIndex(LexicalIndex):
     """Sparse BM25 index in an in-memory Qdrant instance. Non-durable; zero setup."""
 
     def __init__(
-        self, store: BaseStore, collection: str = "lexical", language: Language = Language.ENGLISH
+        self,
+        store: BaseStore,
+        collection: str = "lexical",
+        language: Language = Language.ENGLISH,
+        schema: AccessSchema | None = None,
     ) -> None:
-        super().__init__(store, QdrantClient(location=":memory:"), collection, language)
+        super().__init__(store, QdrantClient(location=":memory:"), collection, language, schema)
 
 
 class PersistentLexicalIndex(LexicalIndex):
@@ -79,8 +85,9 @@ class PersistentLexicalIndex(LexicalIndex):
         path: str = "./data/qdrant/lexical",
         collection: str = "lexical",
         language: Language = Language.ENGLISH,
+        schema: AccessSchema | None = None,
     ) -> None:
-        super().__init__(store, QdrantClient(path=path), collection, language)
+        super().__init__(store, QdrantClient(path=path), collection, language, schema)
 
 
 class RemoteLexicalIndex(LexicalIndex):
@@ -92,6 +99,9 @@ class RemoteLexicalIndex(LexicalIndex):
         url: str,
         collection: str = "lexical",
         language: Language = Language.ENGLISH,
+        schema: AccessSchema | None = None,
         **client_kwargs,
     ) -> None:
-        super().__init__(store, QdrantClient(url=url, **client_kwargs), collection, language)
+        super().__init__(
+            store, QdrantClient(url=url, **client_kwargs), collection, language, schema
+        )

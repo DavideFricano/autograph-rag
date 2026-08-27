@@ -35,3 +35,7 @@ class Settings(BaseSettings):
     # Ingestion paths
     in_dir: Path = Path("data/raw")
     out_dir: Path = Path("data/out")
+
+    # Authorization: the declared access schema. Unset means this deployment does no
+    # ABAC — nothing labels, nothing filters, retrieval returns everything.
+    access_schema_path: Path | None = None

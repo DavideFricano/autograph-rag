@@ -5,17 +5,27 @@ Estende [l'architettura di base](architecture.md) su due assi: più **sorgenti**
 livello di **controllo accessi ABAC** che, dati gli attributi del richiedente, limita quali chunk
 sono raggiungibili in retrieval.
 
-## Stato (31 luglio 2026)
+## Stato (7 agosto 2026)
 
 - **Ingestion multi-source — nel base, implementata.** Filesystem locale + sorgenti remote in pull
   via `ApiLoader`, split `Loader` (acquisizione) / `Converter` (parsing). È già descritta in
   [architecture.md](architecture.md): questo doc non la ridisegna, ne fissa le decisioni e ciò che
   resta da fare.
-- **ABAC — fondamenta costruite, enforcement non ancora cablato.** Esistono il `Filter` neutro
-  (`authorization/filter.py`), la sua semantica di riferimento `evaluate()`, lo schema `AccessSchema`
-  dichiarato (`authorization/schema.py`) e il campo `Metadata.access`. `BaseIndex.retrieve` accetta un
-  filtro e lo applica. **Mancano** il `Labeler`, il PEP, e le due validazioni dello schema che non sono
-  agganciate a nessun confine — quindi oggi `Metadata.access` è un dict non vincolato.
+- **ABAC — contratto cablato su entrambi i lati; mancano PEP e propagazione del filtro.** Esistono il `Filter` neutro
+  (`authorization/filter.py`) con la costante `Allow`, la semantica di riferimento `evaluate()`, lo
+  schema `AccessSchema` (`authorization/schema.py`) e il campo `Source.access`. Lo schema è
+  **dichiarato in un file JSON** (`AccessSchema.from_file`, path in `Settings.access_schema_path`) e
+  **iniettato dal main** in ciò che ne ha bisogno: la sua presenza o assenza è ciò che distingue un
+  deployment con ABAC da uno senza. Su `BaseIndex`: senza schema il filtro resta opzionale e si torna al
+  comportamento di prima; con schema il filtro è **obbligatorio** (`Allow()` è come si dichiara di non
+  averne), viene validato contro il vocabolario, e un chunk privo degli attributi `required` è negato
+  *prima* che il predicato sia valutato. Lato ingestion il **`Labeler`** c'è (`ingestion/labeler.py`):
+  gira tra loader e chunker, scrive gli attributi validati su `Source.access` e aggancia
+  `validate_access`, con tre implementazioni — propagazione (percorso principale), manifest JSON,
+  costanti. Sul ramo remoto `RemoteDocument.access` porta gli attributi del gateway fino a `Source.access`.
+  `QueryPipeline.retrieve/query/stream` propagano il filtro agli index senza interpretarlo. **Manca** il PEP,
+  che sta fuori dalla libreria; e sul ramo filesystem nessun loader mette ancora attributi su un file locale,
+  quindi lì servono `ManifestLabeler` o un sidecar.
 - **Store/index rifattorizzati** dopo la prima stesura di questo doc: il retriever non esiste più, i
   dati del chunk stanno in un `Store` condiviso e gli index tengono solo id + rappresentazione. Le
   parti di questo documento che dicono "lo store filtra" vanno lette come "l'index filtra".
@@ -77,9 +87,9 @@ flowchart LR
         SRC -->|"path / RemoteDocument"| LOAD
         LOAD -->|"convert_file / convert_stream"| CONV
         CONV -->|"Document"| CL
-        CL --> CH
-        CH -->|"list[Chunk]"| TAG
-        TAG --> EMB
+        CL --> TAG
+        TAG -->|"Document + access"| CH
+        CH --> EMB
     end
     subgraph QRY["Query (online)"]
         SEARCH["search(query, filter)<br>tool surface"]:::step
@@ -122,7 +132,7 @@ flowchart LR
     BM -.->|"store.get(ids)"| ST
     RR -->|"authorized chunks"| LOOP
     LOOP -->|"answer"| answer
-    TAG -->|"list[Chunk]"| ST
+    CH -->|"list[Chunk]"| ST
     EMB -.->|"id + vector"| VR
     ST --> RDB
     VR --> VDB
@@ -169,7 +179,8 @@ dei `Bundle`, risoluzione dei `Binary` — e a consegnare alla lib documenti neu
 class RemoteDocument(BaseModel):          # ciò che il gateway garantisce
     data: Base64Bytes                     # payload grezzo (base64 in transito)
     media_type: str                       # "application/pdf", ...
-    external_id: str; title: str; ingested_at: date
+    external_id: str; title: str; time: date
+    access: dict[str, ...] = {}   # ciò che il servizio sa e la lib non può inferire
 
 class BaseLoader(ABC):                     # acquisizione
     def load(self) -> Iterator[Document]: ...       # yield, streaming, skip-per-item
@@ -184,8 +195,27 @@ scritto dal `Labeler` in ingestion — vedi [la sezione sul Labeler](#ingestion-
 
 ## Ingestion: il `Labeler` scrive gli attributi-risorsa
 
-Nel flusso offline il `Labeler` sta tra chunker ed embedder (`CH → TAG → EMB`) e **scrive gli attributi-risorsa
-sul metadata del chunk**. Principio guida, ed è ciò che tiene sano tutto il resto:
+Nel flusso offline il `Labeler` sta **tra loader e chunker** (`LOAD → CONV → CL → TAG → CH`) e **scrive gli
+attributi-risorsa sul `Source` del documento**. Le prime stesure lo mettevano tra chunker ed embedder, con
+gli attributi sul metadata del chunk: superato quando `access` è passato su `Source`, perché etichettare
+dopo il chunking vorrebbe dire riscrivere lo stesso `Source` su N chunk invece che una volta sul documento.
+Il chunker copia già `doc.source` dentro ogni `Metadata`, quindi l'eredità è gratuita.
+
+**Implementato** in `ingestion/labeler.py`. `BaseLabeler.label(document) -> Document` è condiviso — valida con
+`schema.validate_access` e restituisce una copia con gli attributi su `source.access` — e le sottoclassi
+dicono soltanto *da dove vengono i valori*:
+
+- **`PropagatingLabeler`** — gli attributi sono già arrivati col documento (gateway, sidecar): valida e basta.
+  È il percorso principale, quello che tiene la lib indipendente da chi produce il corpus.
+- **`ManifestLabeler`** — file JSON `{default, sources}` indicizzato su `source.id`, per il corpus curato a
+  mano senza nessuno a monte. Un documento non elencato eredita il `default`.
+- **`StaticLabeler`** — le stesse costanti per tutto ciò che quella pipeline ingerisce.
+
+Un attributo non valido **solleva**, non salta il documento: un file corrotto è un problema di quel dato e il
+loader fa bene a scartarlo, ma un attributo non dichiarato è un disaccordo tra il produttore e la
+dichiarazione — riguarda l'intero corpus, e saltare lascerebbe un buco invisibile.
+
+Principio guida, ed è ciò che tiene sano tutto il resto:
 
 > **etichettare ≠ decidere.** Il Labeler marca il dato per *cosa è* (`Access`), non per *chi lo vede*. Le
 > regole vivono nel PDP; cambiare una regola non deve **mai** forzare un re-ingest/re-tag.
@@ -200,18 +230,33 @@ script a monte del PDP i nomi li decide qualcun altro. Quindi è **dichiarato al
 class AttributeType(StrEnum):
     KEYWORD = "keyword"; INTEGER = "integer"; BOOLEAN = "bool"   # = i tipi di payload index
 
-class Attribute(BaseModel):
-    name: str; type: AttributeType; multi: bool = False
+class Attribute(BaseModel):       # extra="forbid": un typo nel file non passa in silenzio
+    name: str; type: AttributeType; multi: bool = False; required: bool = False
 
 class AccessSchema:               # il vocabolario chiuso che il deployment dichiara
+    @classmethod
+    def from_file(cls, path) -> AccessSchema: ...    # lista JSON di attributi, versionata in git
     def validate_access(self, access) -> dict: ...   # cosa il Labeler scrive, in ingestion
     def validate_filter(self, predicate) -> None: ...# cosa il PEP passa, in query
+    def is_labeled(self, access) -> bool: ...        # porta i `required`? altrimenti negato
 
 # types.py — implementato
-class Metadata(BaseModel):
-    source: Source; title: str; page: int | None = None
+class Source(BaseModel):          # gli attributi stanno qui: sono del documento, non del passaggio
+    id: str; name: str; origin: Origin; time: date
     access: dict[str, AttributeValue | list[AttributeValue]] = {}
+
+class Metadata(BaseModel):        # il chunk li eredita portando il suo Source: nessuna copia
+    source: Source; title: str; page: int | None = None
 ```
+
+**Perché su `Source` e non su `Metadata`.** L'accesso è una proprietà del documento sorgente, non della
+singola porzione di testo: mettendolo lì ogni chunk lo eredita per costruzione — nessuno copia niente — e
+l'enforcement ha **un solo posto** da cui leggere (`chunk.metadata.source.access`). È anche il modello di
+produzione: ACL sul documento e chunk che eredita è ciò che fanno Kendra, Azure AI Search e Glean. Il
+prezzo è che gli attributi sono *strutturalmente* uniformi per documento — `source.id` è la chiave di
+cancellazione e dev'essere identico su tutti i chunk, quindi non esistono `Source` diversi per chunk.
+Etichettare una singola sezione diversamente (il caso "inferito", già rimandato) richiederebbe di
+reintrodurre un campo per-chunk.
 
 **Una dichiarazione, tre consumatori**: valida ciò che il Labeler scrive, dice a ogni index quali campi
 payload indicizzare, e rifiuta un filtro che nomina un attributo mai dichiarato — così un attributo fuori
@@ -221,6 +266,14 @@ Il **default-deny** non viene più da un valore restrittivo di default (`CONFIDE
 `evaluate`: **un attributo che il chunk non porta non matcha mai**, quindi un chunk non etichettato è negato
 invece che leggibile da tutti. Stessa proprietà, meccanismo più generale — non richiede che lo schema
 conosca quale valore sia "il più chiuso".
+
+> **Correzione (7 agosto).** Quella semantica da sola non basta: vale per i predicati positivi, non sotto
+> negazione. Su un chunk con `access` vuoto, `Not(Match("classification", {"confidential"}))` è **vero** —
+> il `Match` interno è falso perché l'attributo manca, e il `Not` lo ribalta. Il default-deny dipendeva
+> quindi da come era scritta la policy. Da qui gli attributi `required` nello schema e `is_labeled`,
+> valutato in `BaseIndex.retrieve` **prima** del predicato: così il chunk non etichettato è fuori per
+> qualunque predicato, `Allow()` compreso, e la garanzia torna a essere una proprietà del punto di
+> enforcement invece che dell'autore della policy.
 
 Il nome `Labeler` è in linea col resto della pipeline (`Loader/Converter/Cleaner/Chunker/Embedder`)
 e col lessico del controllo accessi (*security/classification label*): etichetta attributi, non policy.
@@ -238,10 +291,25 @@ Due nature diverse, con costo e affidabilità diversi:
 ### Il gateway sa cose che la lib non può inferire
 
 Sul percorso remoto il **gateway FHIR conosce attributi che dai soli byte non ricavi**: `patient_id`,
-compartment, consenso, sensibilità della risorsa. Ha senso che li **consegni già** (campi aggiuntivi su
-`RemoteDocument`) e il Labeler li **propaghi**, invece di tentare di re-inferirli nella lib. Per i file locali
-si ha solo ciò che è derivabile da path/`Source`. → possibile estensione futura di `RemoteDocument` con gli
-attributi-risorsa noti al gateway.
+compartment, consenso, sensibilità della risorsa. Li **consegna già** e il Labeler li **propaga**, invece
+che tentare di re-inferirli nella lib. **Implementato**: `RemoteDocument.access` porta gli attributi,
+`_to_document` li travasa in `Source.access`, il `PropagatingLabeler` li valida. Per i file locali si ha
+solo ciò che è derivabile da path/`Source`, o un manifest/sidecar.
+
+Gli attributi sono **annidati** sotto `access` e non piatti sull'envelope perché sono due spazi di nomi
+diversi: i campi intorno (`external_id`, `title`, `time`, `media_type`) li decide questo trasporto, le chiavi
+dentro `access` le decide `access_schema.json`. Piatti, un attributo dichiarato `title` colliderebbe col
+protocollo. Il gateway quindi **legge lo stesso `access_schema.json`** della lib: è lì che sta il vocabolario
+in cui deve tradurre FHIR (`meta.security` → `classification`, `subject` → `patient_id`, …).
+
+`origin` invece **non** viene dal payload ma è impostato dal loader: da quale canale è arrivato un documento
+è cosa che la lib sa, e un servizio non deve poter dichiarare il contrario.
+
+**Dove sta il file.** La libreria non ha un'opinione, ed è il motivo per cui `Settings.access_schema_path`
+non ha default: lo decide chi fa il deployment, che è anche l'unico a poterlo condividere col gateway. Questo
+repo ne pubblica solo la **forma** (`access_schema.example.json` alla radice, in coppia con `.env.example`) e
+il suo `main.py` lo cerca in `data/`, come già fa per `system_prompt_path`. In un deployment reale è un
+contratto versionato e revisionato come codice, letto anche dagli altri progetti che producono attributi.
 
 ### Idempotenza
 
@@ -418,7 +486,13 @@ Match(attribute, values)   # l'attributo vale uno di quei valori (copre eq e in)
 And(a, b, ...)             # rifiuta la congiunzione vuota: sarebbe vera per vacuità -> autorizza tutto
 Or(a, b, ...)
 Not(a)
+Allow()                    # costante vera: "nessuna restrizione", detto esplicitamente
 ```
+
+`Allow` esiste perché in un deployment con schema il filtro è obbligatorio, e serviva un modo di dire
+"questa chiamata non ha restrizioni" **distinto da** "mi sono dimenticato l'argomento": stesso effetto a
+runtime di `None`, significato opposto nel codice e nell'audit. Non scavalca `is_labeled` — rinuncia alla
+policy, non all'integrità dello schema. Il suo speculare è il deny canonico (`Match` senza valori).
 
 Rispetto alla prima stesura: `Or` e `Not` non erano previsti e ci sono; **`lte` non c'è**, quindi un
 `classification <= "internal"` oggi **non è esprimibile** e va espanso in `Match("classification", {"public",
@@ -489,7 +563,8 @@ injection irrilevante ai fini dell'accesso: l'identità viaggia accanto alla too
 - **Acquisizione (`Loader`) ≠ parsing (`Converter`)**; routing formato→parser nel converter su
   `media_type`, non un Loader Registry.
 - **`load()` con `yield` + skip-per-item**: un file/record guasto viene saltato e loggato, non aborta il batch.
-- **Nessun campo ABAC nei tipi** finché non si progetta; il gancio sarà un metadata generico sul chunk.
+- **Nessun campo ABAC nei tipi** finché non si progetta *(superato: progettato)*; il gancio è `Source.access`,
+  ereditato da ogni chunk via `Metadata.source`.
 - **ABAC minimo prima del motore** *(futuro)*: 1–2 attributi come tag nel metadata + funzione che traduce
   gli attributi del subject in un metadata-filter pushato nella ANN search. OPA/Cedar/Casbin **solo** quando
   le policy diventano condizionali/gerarchiche.
@@ -518,11 +593,14 @@ injection irrilevante ai fini dell'accesso: l'identità viaggia accanto alla too
    neutro, `load()` con `yield` + skip-per-item. *No FTP, no policy engine, no `attrs`.*
 2. **Gateway FHIR (altra repo)** — servizio esterno che parla FHIR e alimenta la lib via `ApiLoader`.
    Cablaggio nella lib: aggiungere `gateway_url` a `Settings` e scegliere filesystem/gateway all'avvio.
-3. **ABAC hand-written (in-process)** — ⚙️ *parzialmente fatto*: `Filter`, `evaluate()`, `AccessSchema` e
-   `Metadata.access` ci sono, e `BaseIndex.retrieve` applica il filtro. Restano: il `Labeler` che scrive gli
-   attributi (agganciando `validate_access`), il PEP con `compile_filter(subject, action, env) -> Filter`
-   (agganciando `validate_filter`), e il filtro propagato da `QueryPipeline`. L'enforcement vale già su ogni
-   backend; il pushdown nel payload è additivo e si aggiunge quando la **selettività misurata** lo richiede.
+3. **ABAC hand-written (in-process)** — ⚙️ *parzialmente fatto*. Fatto: `Filter` (con `Allow`), `evaluate()`,
+   `AccessSchema` caricato da file e iniettato dal main, `Source.access`, e in `BaseIndex.retrieve` il
+   filtro obbligatorio quando c'è uno schema, la sua validazione contro il vocabolario e il deny dei chunk
+   senza attributi `required`. Fatti anche il `Labeler`, che aggancia `validate_access`, e la propagazione del filtro da `QueryPipeline`.
+   Resta il PEP con `compile_filter(subject, action, env) -> Filter`, che però vive fuori dalla libreria:
+   ha bisogno dell'identità verificata, che la lib non vede mai.
+   L'enforcement vale già su ogni backend; il pushdown nel payload è additivo e si aggiunge quando la
+   **selettività misurata** lo richiede.
 4. **PDP XACML esterno (container)** — si sostituisce il `compile_filter` locale con l'hop al servizio XACML
    dietro la **stessa interfaccia**; il filtro arriva come **obligation** tradotta nel `Filter` neutro.
    Verificare il supporto obligation/reverse-query del motore. OPA/Cedar restano alternative.

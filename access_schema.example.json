@@ -1,0 +1,7 @@
+[
+  { "name": "tenant", "type": "keyword", "required": true },
+  { "name": "classification", "type": "keyword", "required": true },
+  { "name": "patient_id", "type": "keyword" },
+  { "name": "care_team", "type": "keyword", "multi": true },
+  { "name": "exportable", "type": "bool" }
+]
