@@ -96,10 +96,24 @@ def test_manifest_overrides_the_default_per_source(tmp_path):
 
 
 def test_manifest_does_not_need_every_document_enumerated(tmp_path):
-    """A document nobody listed inherits the default — and if the default doesn't carry
-    the required attributes it ends up denied at retrieval, not quietly readable."""
+    """A document nobody listed inherits the default, so a growing corpus does not have to
+    be enumerated in advance to stay ingestible."""
+    path = _manifest(
+        tmp_path,
+        '{ "default": { "tenant": "acme" }, "sources": { "referto.pdf": { "tenant": "globex" } } }',
+    )
+    labeled = ManifestLabeler(_SCHEMA, path).label(_document("nuovo.pdf"))
+    assert labeled.source.access == {"tenant": "acme"}
+
+
+def test_a_document_the_default_does_not_cover_stops_the_ingestion(tmp_path):
+    """With no default carrying the required attributes, an unlisted document could never
+    be retrieved. Indexing it anyway would defer the symptom to query time, where an empty
+    result is indistinguishable from a legitimate deny — so it is refused here, naming the
+    document, which is the one thing the schema cannot know."""
     path = _manifest(tmp_path, '{ "sources": { "referto.pdf": { "tenant": "acme" } } }')
-    assert ManifestLabeler(_SCHEMA, path).label(_document("nuovo.pdf")).source.access == {}
+    with pytest.raises(ValueError, match="nuovo.pdf"):
+        ManifestLabeler(_SCHEMA, path).label(_document("nuovo.pdf"))
 
 
 def test_an_unknown_key_in_the_manifest_is_refused(tmp_path):

@@ -215,6 +215,13 @@ Un attributo non valido **solleva**, non salta il documento: un file corrotto è
 loader fa bene a scartarlo, ma un attributo non dichiarato è un disaccordo tra il produttore e la
 dichiarazione — riguarda l'intero corpus, e saltare lascerebbe un buco invisibile.
 
+Lo stesso vale per ciò che **manca**: `validate_access` verifica anche che gli attributi `required` ci siano.
+Senza, l'ingestione accetterebbe un documento che sa già di non poter mai restituire, e il sintomo
+comparirebbe molto dopo — a query time, come lista vuota indistinguibile da un deny legittimo. Il labeler
+riavvolge l'errore aggiungendo l'id del documento, che è l'unica cosa che lo schema non può sapere.
+`is_labeled` risponde alla stessa domanda **senza** sollevare, perché in retrieval un chunk non etichettato va
+negato in silenzio invece che far esplodere la query.
+
 Principio guida, ed è ciò che tiene sano tutto il resto:
 
 > **etichettare ≠ decidere.** Il Labeler marca il dato per *cosa è* (`Access`), non per *chi lo vede*. Le

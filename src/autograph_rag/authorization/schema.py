@@ -100,7 +100,18 @@ class AccessSchema:
     def validate_access(
         self, access: Mapping[str, object]
     ) -> dict[str, AttributeValue | list[AttributeValue]]:
-        """Checks what the labeler wrote, before it reaches the store and the payloads."""
+        """Checks what the labeler wrote, before it reaches the store and the payloads.
+
+        Validates what is there *and* what is missing. Without the second half the
+        ingestion would accept a document it already knows can never be retrieved — the
+        required attributes absent means every filter denies it — and the symptom would
+        surface much later, at query time, as an empty result indistinguishable from a
+        legitimate deny. Refusing here is the same call already made for an undeclared
+        attribute: it means the producer and the declaration disagree.
+
+        ``is_labeled`` answers the same question without raising, because at retrieval an
+        unlabeled chunk must be denied quietly rather than break the query.
+        """
         validated: dict[str, AttributeValue | list[AttributeValue]] = {}
         for name, value in access.items():
             attribute = self.attribute(name)
@@ -110,6 +121,9 @@ class AccessSchema:
                 validated[name] = [self._checked(attribute, item) for item in value]
             else:
                 validated[name] = self._checked(attribute, value)
+        if not self.is_labeled(validated):
+            missing = [a.name for a in self.attributes if a.required and a.name not in validated]
+            raise ValueError(f"missing required access attributes: {missing}")
         return validated
 
     def validate_filter(self, predicate: Filter) -> None:

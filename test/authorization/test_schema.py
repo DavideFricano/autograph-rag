@@ -91,6 +91,22 @@ def test_is_labeled_asks_only_for_the_required_attributes():
     assert schema.is_labeled({}) is False
 
 
+def test_validate_access_refuses_what_is_missing_not_only_what_is_wrong():
+    """Completeness belongs here rather than in the labeler: the schema owns what
+    `required` means, so every writer inherits the check instead of remembering it."""
+    schema = AccessSchema(
+        [
+            Attribute(name="tenant", type=AttributeType.KEYWORD, required=True),
+            Attribute(name="classification", type=AttributeType.KEYWORD),
+        ]
+    )
+    assert schema.validate_access({"tenant": "acme"}) == {"tenant": "acme"}
+    with pytest.raises(ValueError, match=r"missing required.*tenant"):
+        schema.validate_access({"classification": "public"})
+    with pytest.raises(ValueError, match="missing required"):
+        schema.validate_access({})
+
+
 def test_validate_filter_accepts_the_constant():
     """Allow names no attribute, so there is no vocabulary to check it against."""
     assert _schema().validate_filter(Allow()) is None

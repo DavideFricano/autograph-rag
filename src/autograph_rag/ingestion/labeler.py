@@ -41,7 +41,11 @@ class BaseLabeler(ABC):
         doesn't declare means the producer and the declaration disagree — a configuration
         error that concerns the whole corpus. Skipping would silently leave a hole in it.
         """
-        access = self.schema.validate_access(self._attributes(document))
+        try:
+            access = self.schema.validate_access(self._attributes(document))
+        except ValueError as error:
+            # the schema knows the vocabulary, only this side knows which document
+            raise ValueError(f"document {document.source.id!r}: {error}") from error
         return document.model_copy(
             update={"source": document.source.model_copy(update={"access": access})}
         )
