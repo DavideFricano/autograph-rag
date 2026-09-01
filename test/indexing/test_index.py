@@ -69,14 +69,6 @@ _SCHEMA = AccessSchema(
 )
 
 
-def test_no_filter_returns_every_resolved_hit():
-    index = _wired(
-        [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
-        [("c0", 0.9), ("c1", 0.8)],
-    )
-    assert [sc.chunk.id for sc in index.retrieve("q", top_i=10)] == ["c0", "c1"]
-
-
 def test_unauthorized_chunks_are_dropped():
     index = _wired(
         [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
@@ -149,6 +141,29 @@ def test_denying_everything_returns_an_empty_list():
     index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)])
     deny = Match(attribute="tenant", values=set())
     assert index.retrieve("q", top_i=10, filter=deny) == []
+
+
+def test_labelled_chunks_read_by_an_index_that_enforces_nothing_are_refused():
+    """The one configuration that fails open: someone labelled the data and this index was
+    wired without the schema, so an unfiltered read hands back every tenant at once. Only
+    the unfiltered read is refused — filtering without a declared schema stays allowed,
+    since there the attributes are being honoured (see the tests above)."""
+    index = _wired(
+        [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
+        [("c0", 0.9), ("c1", 0.8)],
+    )
+    with pytest.raises(ValueError, match="enforces nothing"):
+        index.retrieve("q", top_i=10)
+
+
+def test_allow_is_the_way_to_read_them_unfiltered_on_purpose():
+    """Same escape as everywhere else: the filter is no longer omitted, so the intent is
+    written down rather than inferred."""
+    index = _wired(
+        [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
+        [("c0", 0.9), ("c1", 0.8)],
+    )
+    assert [sc.chunk.id for sc in index.retrieve("q", top_i=10, filter=Allow())] == ["c0", "c1"]
 
 
 def test_without_a_schema_the_filter_stays_optional():

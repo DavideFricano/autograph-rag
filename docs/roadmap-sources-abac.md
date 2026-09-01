@@ -351,6 +351,12 @@ riferimento è il **ranker**, non gli index.
   punteggio di ciò che vedi dipende da ciò che non puoi vedere. E `top_k` smetterebbe di contare risultati
   autorizzati.
 
+Una guardia copre l'unica configurazione che falliva aperta: **nessuno schema, nessun filtro, ma i chunk
+risolti portano attributi**. Vuol dire che qualcuno ha etichettato e questo index non applica niente — un
+errore di cablaggio, prima silenzioso. Solo la lettura *senza filtro* è rifiutata: filtrare senza schema
+dichiarato resta lecito, perché lì gli attributi sono onorati. La via d'uscita è la stessa di sempre,
+`Allow()`: il filtro non è più omesso, quindi l'intenzione è scritta invece che dedotta.
+
 Il controllo vive in `BaseIndex.retrieve` e non in `QueryPipeline` perché gli index sono **API pubblica**:
 un utente può chiamare `index.retrieve(query, top_i)` senza pipeline, e un controllo di sicurezza non può
 dipendere da quale wrapper è stato scelto. Stando nella classe base, nessun autore di index può ometterlo.

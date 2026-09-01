@@ -51,6 +51,10 @@ class BaseIndex(ABC):
         leaking. A chunk missing the schema's required attributes is dropped before the
         predicate runs. With a schema declared, omitting the filter raises — ``Allow()``
         is how a call states it has no restriction.
+
+        Omitting it also raises where there is no schema but the chunks turn out to carry
+        access attributes: someone labelled them and this index enforces nothing, which is
+        the one configuration that fails open.
         """
         if self.schema is not None:
             if filter is None:
@@ -65,6 +69,11 @@ class BaseIndex(ABC):
             ScoredChunk(chunk=by_id[id_], score=score) for id_, score in scored if id_ in by_id
         ]
         if filter is None:
+            if any(sc.chunk.metadata.source.access for sc in results):
+                raise ValueError(
+                    "these chunks carry access attributes but this index enforces nothing: "
+                    "pass it the AccessSchema, or Allow() to read them unfiltered on purpose"
+                )
             return results
         return [
             sc
