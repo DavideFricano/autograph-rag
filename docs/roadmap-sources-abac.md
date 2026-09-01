@@ -16,10 +16,10 @@ sono raggiungibili in retrieval.
   schema `AccessSchema` (`authorization/schema.py`) e il campo `Source.access`. Lo schema è
   **dichiarato in un file JSON** (`AccessSchema.from_file`, path in `Settings.access_schema_path`) e
   **iniettato dal main** in ciò che ne ha bisogno: la sua presenza o assenza è ciò che distingue un
-  deployment con ABAC da uno senza. Su `BaseIndex`: senza schema il filtro resta opzionale e si torna al
-  comportamento di prima; con schema il filtro è **obbligatorio** (`Allow()` è come si dichiara di non
-  averne), viene validato contro il vocabolario, e un chunk privo degli attributi `required` è negato
-  *prima* che il predicato sia valutato. Lato ingestion il **`Labeler`** c'è (`ingestion/labeler.py`):
+  deployment con ABAC da uno senza. **Schema e filtro vanno insieme, nei due sensi**: senza schema si può
+  solo leggere non filtrati (e se i chunk risultano etichettati, nemmeno quello); con schema il filtro è
+  **obbligatorio** (`Allow()` è come si dichiara di non averne), viene validato contro il vocabolario, e un
+  chunk privo degli attributi `required` è negato *prima* che il predicato sia valutato. Lato ingestion il **`Labeler`** c'è (`ingestion/labeler.py`):
   gira tra loader e chunker, scrive gli attributi validati su `Source.access` e aggancia
   `validate_access`, con tre implementazioni — propagazione (percorso principale), manifest JSON,
   costanti. Sul ramo remoto `RemoteDocument.access` porta gli attributi del gateway fino a `Source.access`.
@@ -351,11 +351,20 @@ riferimento è il **ranker**, non gli index.
   punteggio di ciò che vedi dipende da ciò che non puoi vedere. E `top_k` smetterebbe di contare risultati
   autorizzati.
 
-Una guardia copre l'unica configurazione che falliva aperta: **nessuno schema, nessun filtro, ma i chunk
-risolti portano attributi**. Vuol dire che qualcuno ha etichettato e questo index non applica niente — un
-errore di cablaggio, prima silenzioso. Solo la lettura *senza filtro* è rifiutata: filtrare senza schema
-dichiarato resta lecito, perché lì gli attributi sono onorati. La via d'uscita è la stessa di sempre,
-`Allow()`: il filtro non è più omesso, quindi l'intenzione è scritta invece che dedotta.
+**Schema e filtro sono inseparabili**, e le tre configurazioni a metà sollevano tutte.
+
+- *Schema senza filtro* → errore; `Allow()` è come si dichiara di non avere restrizioni.
+- *Filtro senza schema* → errore. Non c'è vocabolario contro cui validare il predicato e non esiste la
+  nozione di attributo obbligatorio, quindi una negazione pura ammetterebbe un chunk non etichettato: un
+  filtro che garantisce meno di quanto sembri. **Correzione del 27 agosto**: questa cella era stata lasciata
+  lecita argomentando che «non è una questione di sicurezza, fallisce comunque chiuso». Falso: vale per i
+  predicati positivi, non sotto negazione.
+- *Nessuno schema ma chunk etichettati* → errore alla lettura non filtrata. Se nello store ci sono attributi,
+  qualcuno ha fatto girare un Labeler — che uno schema lo richiede — quindi lo schema esiste in ingestion e
+  manca in query: è la deriva fra i due processi, non una scelta.
+
+Per lo stesso motivo uno schema che **non dichiara nessun attributo `required`** è rifiutato: `is_labeled`
+non avrebbe niente da controllare e il buco della negazione si riaprirebbe.
 
 Il controllo vive in `BaseIndex.retrieve` e non in `QueryPipeline` perché gli index sono **API pubblica**:
 un utente può chiamare `index.retrieve(query, top_i)` senza pipeline, e un controllo di sicurezza non può

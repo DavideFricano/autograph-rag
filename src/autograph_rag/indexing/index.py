@@ -49,19 +49,28 @@ class BaseIndex(ABC):
         score spreads within each list. A subclass may also push it into its backend; this
         check stays regardless, so an index that mistranslates it returns less rather than
         leaking. A chunk missing the schema's required attributes is dropped before the
-        predicate runs. With a schema declared, omitting the filter raises — ``Allow()``
-        is how a call states it has no restriction.
+        predicate runs.
 
-        Omitting it also raises where there is no schema but the chunks turn out to carry
-        access attributes: someone labelled them and this index enforces nothing, which is
-        the one configuration that fails open.
+        Schema and filter go together, in both directions. With a schema, omitting the
+        filter raises — ``Allow()`` is how a call states it has no restriction. Without
+        one, passing a filter raises too: there is no vocabulary to validate it against
+        and no notion of a required attribute, so an unlabelled chunk would satisfy a
+        negation. And a schemaless index asked for chunks that turn out to be labelled
+        raises as well, since someone enforced something the query side knows nothing of.
         """
-        if self.schema is not None:
-            if filter is None:
+        if self.schema is None:
+            if filter is not None:
                 raise ValueError(
-                    "this index declares an access schema, so retrieve requires a filter; "
-                    "pass Allow() to state explicitly that the call has no restriction"
+                    "filtering needs the AccessSchema this index was not given: without a "
+                    "declared vocabulary the predicate cannot be validated and the required "
+                    "attributes are unknown, so an unlabelled chunk would satisfy a negation"
                 )
+        elif filter is None:
+            raise ValueError(
+                "this index declares an access schema, so retrieve requires a filter; "
+                "pass Allow() to state explicitly that the call has no restriction"
+            )
+        else:
             self.schema.validate_filter(filter)
         scored = self._search(query, top_i)
         by_id = {chunk.id: chunk for chunk in self.store.get([id_ for id_, _ in scored])}
@@ -72,12 +81,12 @@ class BaseIndex(ABC):
             if any(sc.chunk.metadata.source.access for sc in results):
                 raise ValueError(
                     "these chunks carry access attributes but this index enforces nothing: "
-                    "pass it the AccessSchema, or Allow() to read them unfiltered on purpose"
+                    "give it the AccessSchema they were labelled against"
                 )
             return results
         return [
             sc
             for sc in results
-            if (self.schema is None or self.schema.is_labeled(sc.chunk.metadata.source.access))
+            if self.schema.is_labeled(sc.chunk.metadata.source.access)
             and evaluate(filter, sc.chunk.metadata.source.access)
         ]

@@ -10,7 +10,7 @@ from autograph_rag.authorization.schema import AccessSchema, Attribute, Attribut
 def _schema() -> AccessSchema:
     return AccessSchema(
         [
-            Attribute(name="tenant", type=AttributeType.KEYWORD),
+            Attribute(name="tenant", type=AttributeType.KEYWORD, required=True),
             Attribute(name="classification", type=AttributeType.KEYWORD),
             Attribute(name="care_team", type=AttributeType.KEYWORD, multi=True),
             Attribute(name="retention_years", type=AttributeType.INTEGER),
@@ -69,6 +69,14 @@ def test_a_malformed_file_fails_at_load_time(tmp_path):
     path = _write(tmp_path, '[{ "name": "tenant", "type": "keyword" },]')
     with pytest.raises(json.JSONDecodeError):
         AccessSchema.from_file(path)
+
+
+def test_a_vocabulary_that_requires_nothing_is_refused():
+    """The same half-configuration in another guise: with no required attribute nothing
+    obliges a chunk to carry any, so ``is_labeled`` always passes and a bare negation lets
+    an unlabelled chunk through — a schema that looks like access control and isn't."""
+    with pytest.raises(ValueError, match="no attribute is required"):
+        AccessSchema([Attribute(name="tenant", type=AttributeType.KEYWORD)])
 
 
 def test_an_empty_vocabulary_is_refused():

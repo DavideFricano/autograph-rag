@@ -51,8 +51,9 @@ class AccessSchema:
     One declaration, three consumers: it validates what the labeler writes, tells each
     index which payload fields to index, and rejects a filter naming an attribute nobody
     declared. Whether one exists is what tells a deployment apart — no schema means no
-    ABAC at all; a schema makes labeling and filtering mandatory. An empty vocabulary is
-    refused.
+    ABAC at all; a schema makes labeling and filtering mandatory. A vocabulary that is
+    empty, or that requires nothing, is refused: it would claim to do access control while
+    obliging no chunk to carry anything.
     """
 
     def __init__(self, attributes: Sequence[Attribute]) -> None:
@@ -60,6 +61,11 @@ class AccessSchema:
         self._by_name = {attribute.name: attribute for attribute in self.attributes}
         if not self.attributes:
             raise ValueError("the access schema declares no attribute")
+        if not any(attribute.required for attribute in self.attributes):
+            raise ValueError(
+                "no attribute is required: nothing would then oblige a chunk to carry any, "
+                "and an unlabelled one would satisfy a negated predicate"
+            )
         if len(self._by_name) != len(self.attributes):
             raise ValueError("duplicate attribute name in the access schema")
 

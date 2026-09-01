@@ -50,14 +50,6 @@ def _chunk(id: str, access: dict | None = None) -> Chunk:
     return Chunk(id=id, text=f"text of {id}", metadata=Metadata(source=source, title="S"))
 
 
-def _wired(
-    chunks: list[Chunk], hits: list[tuple[str, float]], schema: AccessSchema | None = None
-) -> _FakeIndex:
-    store = VolatileStore()
-    store.add(chunks)
-    return _FakeIndex(store, hits, schema)
-
-
 _ACME = Match(attribute="tenant", values={"acme"})
 
 # A deployment that declared ABAC: `tenant` must be on every chunk, `classification` may be.
@@ -67,6 +59,18 @@ _SCHEMA = AccessSchema(
         Attribute(name="classification", type=AttributeType.KEYWORD),
     ]
 )
+
+
+def _wired(
+    chunks: list[Chunk], hits: list[tuple[str, float]], schema: AccessSchema | None = _SCHEMA
+) -> _FakeIndex:
+    """Declared schema by default, since filtering now requires one; pass ``schema=None``
+    for the deployment that does no access control at all."""
+    store = VolatileStore()
+    store.add(chunks)
+    return _FakeIndex(store, hits, schema)
+
+
 
 
 def test_unauthorized_chunks_are_dropped():
@@ -151,25 +155,25 @@ def test_labelled_chunks_read_by_an_index_that_enforces_nothing_are_refused():
     index = _wired(
         [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
         [("c0", 0.9), ("c1", 0.8)],
+        schema=None,
     )
     with pytest.raises(ValueError, match="enforces nothing"):
         index.retrieve("q", top_i=10)
 
 
-def test_allow_is_the_way_to_read_them_unfiltered_on_purpose():
-    """Same escape as everywhere else: the filter is no longer omitted, so the intent is
-    written down rather than inferred."""
-    index = _wired(
-        [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
-        [("c0", 0.9), ("c1", 0.8)],
-    )
-    assert [sc.chunk.id for sc in index.retrieve("q", top_i=10, filter=Allow())] == ["c0", "c1"]
+def test_filtering_without_a_declared_schema_is_refused():
+    """The two go together. Without a vocabulary the predicate cannot be validated and
+    there is no notion of a required attribute, so a bare negation would admit a chunk
+    nobody labelled — a filter that quietly guarantees less than it looks like it does."""
+    index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)], schema=None)
+    with pytest.raises(ValueError, match="filtering needs the AccessSchema"):
+        index.retrieve("q", top_i=10, filter=_ACME)
 
 
 def test_without_a_schema_the_filter_stays_optional():
     """A deployment that declares no schema does no ABAC, and nothing changes for it:
     omitting the filter is not an error, it returns everything."""
-    index = _wired([_chunk("c0"), _chunk("c1")], [("c0", 0.9), ("c1", 0.8)])
+    index = _wired([_chunk("c0"), _chunk("c1")], [("c0", 0.9), ("c1", 0.8)], schema=None)
     assert [sc.chunk.id for sc in index.retrieve("q", top_i=10)] == ["c0", "c1"]
 
 
@@ -210,14 +214,6 @@ def test_a_chunk_missing_a_required_attribute_is_denied_under_any_predicate():
     not_confidential = Not(clause=Match(attribute="classification", values={"confidential"}))
     assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=not_confidential)] == ["c0"]
     assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=Allow())] == ["c0"]
-
-
-def test_the_same_predicate_admits_the_unlabeled_chunk_without_a_schema():
-    """Same data, same filter, no schema: the chunk comes back. Pins that the guarantee
-    above comes from the declaration and not from ``evaluate`` having changed."""
-    index = _wired([_chunk("unlabeled")], [("unlabeled", 0.8)])
-    not_confidential = Not(clause=Match(attribute="classification", values={"confidential"}))
-    assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=not_confidential)] == ["unlabeled"]
 
 
 def test_a_filter_naming_an_undeclared_attribute_is_refused():
