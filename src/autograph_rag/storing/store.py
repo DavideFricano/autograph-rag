@@ -59,7 +59,7 @@ class PersistentStore(BaseStore):
     to override storage (e.g. an in-memory ``:memory:`` one in tests).
     """
 
-    def __init__(self, path: str = "./data/store.db", connection: sqlite3.Connection | None = None) -> None:
+    def __init__(self, path: str = "./data/db/store.db", connection: sqlite3.Connection | None = None) -> None:
         self.conn = connection if connection is not None else sqlite3.connect(path)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS chunks "

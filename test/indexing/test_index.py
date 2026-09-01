@@ -117,7 +117,8 @@ def test_unlabeled_chunk_is_denied():
 
 def test_a_composite_predicate_is_honoured_whole():
     """The whole tree decides, not just its first clause."""
-    predicate = And(_ACME, Not(Match(attribute="classification", values={"confidential"})))
+    not_confidential = Not(clause=Match(attribute="classification", values={"confidential"}))
+    predicate = And(clauses=[_ACME, not_confidential])
     index = _wired(
         [
             _chunk("c0", {"tenant": "acme", "classification": "public"}),
@@ -191,7 +192,7 @@ def test_a_chunk_missing_a_required_attribute_is_denied_under_any_predicate():
         [("c0", 0.9), ("unlabeled", 0.8)],
         _SCHEMA,
     )
-    not_confidential = Not(Match(attribute="classification", values={"confidential"}))
+    not_confidential = Not(clause=Match(attribute="classification", values={"confidential"}))
     assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=not_confidential)] == ["c0"]
     assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=Allow())] == ["c0"]
 
@@ -200,7 +201,7 @@ def test_the_same_predicate_admits_the_unlabeled_chunk_without_a_schema():
     """Same data, same filter, no schema: the chunk comes back. Pins that the guarantee
     above comes from the declaration and not from ``evaluate`` having changed."""
     index = _wired([_chunk("unlabeled")], [("unlabeled", 0.8)])
-    not_confidential = Not(Match(attribute="classification", values={"confidential"}))
+    not_confidential = Not(clause=Match(attribute="classification", values={"confidential"}))
     assert [sc.chunk.id for sc in index.retrieve("q", 10, filter=not_confidential)] == ["unlabeled"]
 
 

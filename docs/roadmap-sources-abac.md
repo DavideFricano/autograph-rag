@@ -275,7 +275,7 @@ invece che leggibile da tutti. Stessa proprietà, meccanismo più generale — n
 conosca quale valore sia "il più chiuso".
 
 > **Correzione (7 agosto).** Quella semantica da sola non basta: vale per i predicati positivi, non sotto
-> negazione. Su un chunk con `access` vuoto, `Not(Match("classification", {"confidential"}))` è **vero** —
+> negazione. Su un chunk con `access` vuoto, un `Not` che nega un `Match` su `classification` è **vero** —
 > il `Match` interno è falso perché l'attributo manca, e il `Not` lo ribalta. Il default-deny dipendeva
 > quindi da come era scritta la policy. Da qui gli attributi `required` nello schema e `is_labeled`,
 > valutato in `BaseIndex.retrieve` **prima** del predicato: così il chunk non etichettato è fuori per
@@ -454,34 +454,57 @@ Flusso: il PEP manda `subject + action + env` (senza risorsa concreta, per la se
 `Permit` + obligation `data-filter` → il PEP la traduce nel **`Filter` neutro** → pushdown negli index. L'audit
 obbligatorio è **anch'esso un'obligation** (`must-log`), che convive nella stessa risposta.
 
-Le obligation XACML portano coppie `(AttributeId, Value)`, **non operatori**: l'operatore si codifica
-nell'obligation-id, con una convenzione mappata dal PEP.
+#### Il soffitto: dal PDP arrivano solo congiunzioni
+
+Le obligation XACML portano coppie **piatte** `(AttributeId, Value)`: non c'è modo standard di annidarle.
+Quindi dal PDP puoi ricevere **soltanto una congiunzione di `Match`** — niente `Or` fra attributi diversi,
+niente `Not`, niente annidamento. La disgiunzione la ottieni solo *dentro* un attributo, come `Match`
+multi-valore. Il limite non era scritto qui e va tenuto presente parlando col team che gestisce il PDP.
+
+In pratica morde poco, perché **policy ricca ≠ filtro ricco**: il PDP può valutare venti attributi, consenso,
+ora e purpose, e concludere comunque con `tenant = X AND classification IN (…)`. La complessità dell'ABAC sta
+in *come* il filtro viene calcolato, non nella forma del risultato. E le disgiunzioni che servono davvero
+("nel care team **oppure** break-glass") si esprimono come **rami di policy distinti**, ognuno col proprio
+insieme di obligation: è il PDP a scegliere il ramo, non il filtro a rappresentare l'alternativa.
+
+`Or` e `Not` restano nell'algebra perché servono ai filtri scritti a mano e a `evaluate` come semantica di
+riferimento: l'algebra è un **sovrainsieme** di ciò che il PDP emette.
+
+#### La convenzione sull'obligation-id
+
+Nessuno standard dice cosa significhi un `ObligationId`: è un URN arbitrario deciso da chi autora la policy,
+quindi la traduzione è un **contratto** fra PEP e autore delle policy, come lo schema. Ma può essere quasi
+automatica se l'id è strutturato, invece di una tabella da mantenere a mano:
+
+```
+urn:<org>:filter:<attributo>       es. urn:acme:filter:tenant
+```
+
+**Non serve codificare l'operatore**: l'algebra ha solo `Match`, che copre già sia l'uguaglianza sia
+l'appartenenza a un insieme. Il PEP spezza l'id, cerca `<attributo>` in `access_schema.json` — che gli dà
+nome, tipo e cardinalità — e costruisce un `Match` con i valori dell'obligation; più obligation diventano un
+`And`. Aggiungere un attributo è una riga nello schema più una regola nella policy, **senza toccare il codice
+del PEP**.
 
 ```python
-# registro cross-confine: obligation-id -> (campo-store, operatore del Filter neutro)
-FILTER_OBLIGATIONS = {
-    "urn:acme:filter:classification-max": ("classification", Op.LTE),
-    "urn:acme:filter:tenant-eq":          ("tenant",         Op.EQ),
-    "urn:acme:filter:source-in":          ("source_system",  Op.IN),
-}
-
 def obligations_to_filter(decision, obligations) -> Filter:
     if decision != "Permit":
-        return Filter.deny_all()                 # default-deny
+        return Match(attribute=any_declared, values=set())   # deny canonico
     conditions = []
     for ob in obligations:
-        if ob.id in FILTER_OBLIGATIONS:
-            field, op = FILTER_OBLIGATIONS[ob.id]
-            conditions.append(Condition(key=field, op=op, value=ob.value))
-        elif ob.id == AUDIT_OBLIGATION:
-            continue                             # gestita come log, non è un vincolo
-        else:
-            return Filter.deny_all()             # REGOLA XACML: obligation non gestita => Deny
-    return Filter(conditions=conditions)         # AND delle condizioni
+        kind, name = ob.id.split(":")[2:4]
+        if kind == "audit":
+            log(ob); continue                    # è un obbligo di log, non un vincolo
+        if kind != "filter":
+            raise Deny(ob.id)                    # REGOLA XACML: non gestita => Deny
+        schema.attribute(name)                   # non dichiarato => rifiutato
+        conditions.append(Match(attribute=name, values=values_of(ob)))
+    return And(clauses=conditions)
 ```
 
 **Regola non negoziabile (standard XACML):** un'obligation che il PEP non sa scaricare **deve** essere trattata
-come Deny — mai ignorata, sarebbe under-restriction.
+come Deny — mai ignorata, sarebbe under-restriction. Lo stesso vale per un attributo fuori vocabolario, che
+`validate_filter` rifiuta comunque a valle.
 
 ### Il `Filter` neutro è il perno
 
@@ -489,12 +512,16 @@ Grammatica piccola e chiusa, **implementata** come algebra di predicati anziché
 AND:
 
 ```python
-Match(attribute, values)   # l'attributo vale uno di quei valori (copre eq e in)
-And(a, b, ...)             # rifiuta la congiunzione vuota: sarebbe vera per vacuità -> autorizza tutto
-Or(a, b, ...)
-Not(a)
+Match(attribute=..., values=...)   # l'attributo vale uno di quei valori (copre eq e in)
+And(clauses=[...])                 # rifiuta la congiunzione vuota: vera per vacuità -> autorizza tutto
+Or(clauses=[...])
+Not(clause=...)
 Allow()                    # costante vera: "nessuna restrizione", detto esplicitamente
 ```
+
+I nodi si costruiscono **solo per keyword**: un solo modo di crearne uno, ed è lo stesso con cui la
+validazione lo ricostruisce dal JSON. Una forma variadica `And(a, b)` richiederebbe un `__init__` custom che
+accetta entrambe le convenzioni — macchinario comprato solo per l'estetica di un letterale scritto a mano.
 
 `Allow` esiste perché in un deployment con schema il filtro è obbligatorio, e serviva un modo di dire
 "questa chiamata non ha restrizioni" **distinto da** "mi sono dimenticato l'argomento": stesso effetto a
@@ -509,6 +536,13 @@ finché sono tre l'enumerazione è più semplice e non introduce il problema di 
 `evaluate(predicate, access)` è la **semantica di riferimento** dell'algebra, e ha tre ruoli: è il fallback per
 i backend che non filtrano, è l'enforcement autorevole in `BaseIndex.retrieve`, e diventa l'**oracolo** contro
 cui testare ogni pushdown — un push deve dare lo stesso insieme che la valutazione in Python.
+
+Ogni nodo porta un tag `type` e le clausole sono tipizzate come **unione discriminata** (`Clause`), non come
+la base `Filter`. Serve perché l'albero sopravviva a un round trip: pydantic serializza secondo il tipo
+*dichiarato*, quindi con le clausole tipizzate sulla base — priva di campi — un predicato usciva come
+`{"clauses":[{},{}]}` **senza sollevare niente**. Per un log di audit è peggio di un errore. Serializzare non
+richiede nulla di speciale (`predicate.model_dump_json()`); rileggere passa da `FilterAdapter`, che dal tag sa
+quale nodo ricostruire.
 
 La traduzione per backend resta il pushdown, come ottimizzazione: `models.Filter(must=[FieldCondition(...)])`
 per Qdrant. **Non ancora implementata.**

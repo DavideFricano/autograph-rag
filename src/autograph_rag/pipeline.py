@@ -23,9 +23,8 @@ class IngestionPipeline:
     told to index the same chunks. ``remove`` fans out the same way so a source is
     dropped from every index and then from the store — no dangling ids, no orphans.
 
-    The labeler, when the deployment declared an access schema, runs between loading and
-    chunking: it writes the attributes once on the document's ``Source``, which every
-    chunk then carries. Without a schema there is no labeler and nothing changes.
+    The labeler, when there is one, runs between loading and chunking: it writes the
+    attributes once on the document's ``Source``, which every chunk then carries.
     """
 
     def __init__(
@@ -64,9 +63,8 @@ class QueryPipeline:
     Each index resolves its own hits to chunks through the shared store, so retrieval is
     a list of ``ScoredChunk`` lists that the fusion ranker merges (RRF/RSF).
 
-    The authorization filter travels through it without being interpreted: whoever calls
-    (the PEP, holding the verified identity this library never sees) decides it, and every
-    index applies it. Nothing about the policy lives here.
+    The authorization filter travels through it without being interpreted: the caller (a
+    PEP, holding the identity this library never sees) decides it, the indexes apply it.
     """
 
     def __init__(
@@ -92,11 +90,8 @@ class QueryPipeline:
     def retrieve(self, query: str, filter: Filter | None = None) -> list[ScoredChunk]:
         """The authorization predicate is handed to every index untouched.
 
-        Pure propagation: the decision was taken upstream by the PEP and the enforcement
-        happens downstream in ``BaseIndex.retrieve``, so there is nothing to do here but
-        carry it. That the filter is optional is not this class's choice either — where a
-        schema is declared, omitting it is refused by the index, and here it would only be
-        a second place to get that rule slightly wrong.
+        Whether it may be omitted is decided by the index, not here: duplicating that rule
+        would only create a second place to get it wrong.
         """
         retrieved = [index.retrieve(query, self.top_i, filter) for index in self.indexes]
         fused = self.ranker.rank(retrieved, self.top_k)

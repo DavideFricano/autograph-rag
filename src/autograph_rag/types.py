@@ -22,12 +22,9 @@ class RemoteDocument(BaseModel):
     both filesystem and remote sources. Binary payloads travel base64-encoded in JSON
     and are decoded to real bytes on validation.
 
-    ``access`` is what the service knows and the library cannot infer from bytes — which
-    patient a record belongs to, how it is classified, who may be its care team. It is
-    nested rather than flat because its keys come from the deployment's access schema
-    while the fields around it are this transport's own: keeping the two namespaces apart
-    means a newly declared attribute can never collide with the envelope. The service must
-    speak that vocabulary; an attribute nobody declared stops the ingestion at the labeler.
+    ``access`` carries what the service knows and the library cannot infer from bytes —
+    patient, classification, care team — keyed by the names the deployment's access schema
+    declares. The labeler checks them; an undeclared one stops the ingestion.
     """
 
     model_config = ConfigDict(extra="ignore")

@@ -1,5 +1,15 @@
 from autograph_rag.augmentation.augmenter import BaseAugmenter, PromptAugmenter
-from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or, evaluate
+from autograph_rag.authorization.filter import (
+    Allow,
+    And,
+    Clause,
+    Filter,
+    FilterAdapter,
+    Match,
+    Not,
+    Or,
+    evaluate,
+)
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import BaseEmbedder, LocalEmbedder, OpenAIEmbedder
@@ -81,12 +91,14 @@ __all__ = [
     "BaseRanker",
     "BaseStore",
     "Chunk",
+    "Clause",
     "Cleaner",
     "CrossReranker",
     "DistributionScoreFusionRanker",
     "Document",
     "FileLoader",
     "Filter",
+    "FilterAdapter",
     "FixedSizeChunker",
     "FusionRanker",
     "HierarchicalChunker",

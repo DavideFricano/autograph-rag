@@ -1,16 +1,25 @@
 import pytest
 from pydantic import ValidationError
 
-from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or, evaluate
+from autograph_rag.authorization.filter import (
+    Allow,
+    And,
+    Filter,
+    FilterAdapter,
+    Match,
+    Not,
+    Or,
+    evaluate,
+)
 
 
 def test_nested_clauses_keep_their_concrete_type():
     """Clauses are declared as the abstract Filter, so the tree must not be flattened to
     it — an index translating the predicate needs to see Match, And, Or, Not."""
-    predicate = And(
+    predicate = And(clauses=[
         Match(attribute="tenant", values={"acme"}),
-        Not(Match(attribute="classification", values={"confidential"})),
-    )
+        Not(clause=Match(attribute="classification", values={"confidential"})),
+    ])
     assert [type(clause).__name__ for clause in predicate.clauses] == ["Match", "Not"]
 
 
@@ -84,22 +93,22 @@ def test_and_or_not():
     tenant = Match(attribute="tenant", values={"acme"})
     secret = Match(attribute="classification", values={"confidential"})
 
-    assert evaluate(And(tenant, secret), access) is True
-    assert evaluate(And(tenant, Not(secret)), access) is False
-    assert evaluate(Or(Not(tenant), secret), access) is True
-    assert evaluate(Not(Not(tenant)), access) is True
+    assert evaluate(And(clauses=[tenant, secret]), access) is True
+    assert evaluate(And(clauses=[tenant, Not(clause=secret)]), access) is False
+    assert evaluate(Or(clauses=[Not(clause=tenant), secret]), access) is True
+    assert evaluate(Not(clause=Not(clause=tenant)), access) is True
 
 
 def test_nested_tree_is_walked_fully():
     access = {"tenant": "acme", "classification": "public", "care_team": ["icu"]}
-    predicate = And(
+    predicate = And(clauses=[
         Match(attribute="tenant", values={"acme"}),
-        Or(
+        Or(clauses=[
             Match(attribute="classification", values={"public", "internal"}),
             Match(attribute="care_team", values={"cardiology"}),
-        ),
-        Not(Match(attribute="classification", values={"confidential"})),
-    )
+        ]),
+        Not(clause=Match(attribute="classification", values={"confidential"})),
+    ])
     assert evaluate(predicate, access) is True
 
 
@@ -108,7 +117,7 @@ def test_allow_is_the_constant_true():
     caller that has no restriction can say so instead of omitting the argument."""
     assert evaluate(Allow(), {}) is True
     assert evaluate(Allow(), {"tenant": "acme"}) is True
-    assert evaluate(Not(Allow()), {"tenant": "acme"}) is False
+    assert evaluate(Not(clause=Allow()), {"tenant": "acme"}) is False
 
 
 def test_allow_takes_no_argument():
@@ -128,3 +137,51 @@ def test_unknown_node_raises_instead_of_defaulting():
 
     with pytest.raises(ValueError, match="unsupported"):
         evaluate(_Unhandled(), {"tenant": "acme"})
+
+
+def test_a_predicate_survives_a_round_trip():
+    """The reason every node carries a type tag. Before it, clauses declared as the
+    fieldless base serialized to `{}` — without raising — so an audit log would have
+    recorded a predicate that means nothing, and a filter crossing a process boundary
+    would have arrived empty."""
+    predicate = And(clauses=[
+        Match(attribute="tenant", values={"acme"}),
+        Not(clause=Match(attribute="classification", values={"confidential"})),
+        Or(clauses=[Allow(), Match(attribute="care_team", values={"icu"})]),
+    ])
+
+    back = FilterAdapter.validate_json(predicate.model_dump_json())
+
+    assert back == predicate
+    assert [type(clause).__name__ for clause in back.clauses] == ["Match", "Not", "Or"]
+
+
+def test_the_serialized_form_keeps_the_attributes_and_values():
+    """What an audit log actually needs to read back."""
+    dumped = Match(attribute="tenant", values={"acme"}).model_dump()
+    assert dumped == {"type": "match", "attribute": "tenant", "values": frozenset({"acme"})}
+
+
+def test_a_round_tripped_predicate_decides_the_same_way():
+    """Equality is not enough on its own: what matters is that the rebuilt tree authorizes
+    exactly what the original did."""
+    predicate = And(clauses=[
+        Match(attribute="tenant", values={"acme", "globex"}),
+        Not(clause=Match(attribute="exportable", values={True})),
+    ])
+    back = FilterAdapter.validate_json(predicate.model_dump_json())
+
+    for access in (
+        {"tenant": "acme", "exportable": False},
+        {"tenant": "acme", "exportable": True},
+        {"tenant": "other", "exportable": False},
+        {},
+    ):
+        assert evaluate(back, access) == evaluate(predicate, access)
+
+
+def test_an_unknown_node_type_is_refused_on_parse():
+    """A tag nobody declared must not be read as a bare Filter that evaluate would then
+    reject at decision time — it fails at the boundary instead."""
+    with pytest.raises(ValidationError):
+        FilterAdapter.validate_json('{"type": "maybe", "attribute": "tenant"}')

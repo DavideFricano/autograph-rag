@@ -110,7 +110,8 @@ def test_validate_access_refuses_what_is_missing_not_only_what_is_wrong():
 def test_validate_filter_accepts_the_constant():
     """Allow names no attribute, so there is no vocabulary to check it against."""
     assert _schema().validate_filter(Allow()) is None
-    assert _schema().validate_filter(And(Allow(), Match(attribute="tenant", values={"acme"}))) is None
+    predicate = And(clauses=[Allow(), Match(attribute="tenant", values={"acme"})])
+    assert _schema().validate_filter(predicate) is None
 
 
 def test_duplicate_declaration_is_refused():
@@ -169,22 +170,22 @@ def test_single_valued_attribute_refuses_a_collection():
 def test_validate_filter_walks_the_whole_tree():
     """The undeclared attribute is buried under And -> Or -> Not, so a shallow check
     would let it reach the backend and silently match nothing."""
-    predicate = And(
+    predicate = And(clauses=[
         Match(attribute="tenant", values={"acme"}),
-        Or(
+        Or(clauses=[
             Match(attribute="classification", values={"public"}),
-            Not(Match(attribute="undeclared", values={"x"})),
-        ),
-    )
+            Not(clause=Match(attribute="undeclared", values={"x"})),
+        ]),
+    ])
     with pytest.raises(ValueError, match="undeclared"):
         _schema().validate_filter(predicate)
 
 
 def test_validate_filter_accepts_a_well_formed_predicate():
-    predicate = And(
+    predicate = And(clauses=[
         Match(attribute="tenant", values={"acme"}),
-        Not(Match(attribute="classification", values={"confidential"})),
-    )
+        Not(clause=Match(attribute="classification", values={"confidential"})),
+    ])
     assert _schema().validate_filter(predicate) is None
 
 

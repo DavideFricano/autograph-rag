@@ -82,7 +82,7 @@ class PersistentLexicalIndex(LexicalIndex):
     def __init__(
         self,
         store: BaseStore,
-        path: str = "./data/qdrant/lexical",
+        path: str = "./data/db/lexical",
         collection: str = "lexical",
         language: Language = Language.ENGLISH,
         schema: AccessSchema | None = None,

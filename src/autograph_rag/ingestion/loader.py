@@ -102,10 +102,8 @@ class RemoteLoader(BaseLoader):
     def _to_document(self, item: RemoteDocument) -> Document:
         """The mapping is the contract between an external service and the RAG types.
 
-        ``origin`` is set here and not read from the payload: which channel a document came
-        through is something this loader knows and the service must not be able to claim.
-        The access attributes instead are copied as they arrived — the labeler is where
-        they are checked against the declared vocabulary.
+        ``origin`` is set here rather than read from the payload, so a service cannot claim
+        it. The access attributes are copied as they arrived; the labeler checks them.
         """
         text = self.converter.convert_stream(item.data, item.media_type, name=item.title)
         return Document(

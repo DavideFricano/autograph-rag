@@ -13,17 +13,11 @@ class BaseLabeler(ABC):
     """Writes the access attributes of a document, at the ingestion boundary.
 
     **Labelling is not deciding.** It marks the data for *what it is*, never for *who may
-    see it*: the rules live in the policy engine, so changing a rule must never force a
-    re-ingestion. That is why the only contract shared by ingestion and query is the
-    attribute schema, not a policy.
+    see it*, so changing a policy never forces a re-ingestion.
 
-    It runs on the ``Document``, before chunking: the attributes belong to the source
-    document, so they are written once on its ``Source`` and every chunk inherits them by
-    carrying it — the chunker already copies ``doc.source`` into each ``Metadata``.
-
-    Subclasses only say *where the values come from* (``_attributes``); validating them
-    against the declared vocabulary and attaching them is shared, so no labeler can put an
-    undeclared attribute into the store.
+    Runs on the ``Document``, before chunking: the attributes are written once on its
+    ``Source`` and every chunk inherits them by carrying it. Subclasses only say where the
+    values come from (``_attributes``); validating and attaching them is shared.
     """
 
     def __init__(self, schema: AccessSchema) -> None:
@@ -36,10 +30,9 @@ class BaseLabeler(ABC):
     def label(self, document: Document) -> Document:
         """A copy of the document whose ``source.access`` holds the validated attributes.
 
-        Invalid attributes raise rather than being skipped: a corrupt file is a problem
-        with *that* datum and the loader is right to drop it, but an attribute the schema
-        doesn't declare means the producer and the declaration disagree — a configuration
-        error that concerns the whole corpus. Skipping would silently leave a hole in it.
+        Attributes that are invalid or missing raise rather than being skipped: unlike a
+        corrupt file, they mean the producer and the declaration disagree. The failure
+        carries the document id, which the schema cannot know.
         """
         try:
             access = self.schema.validate_access(self._attributes(document))
@@ -54,11 +47,8 @@ class BaseLabeler(ABC):
 class PropagatingLabeler(BaseLabeler):
     """Keeps the attributes the document already arrived with, and validates them.
 
-    The main path: whoever produced the corpus knows the attributes — the FHIR gateway
-    knows the patient and the consent, the script that prepared the folder knows the
-    tenant — and the library does not try to re-infer from bytes what it cannot know. Here
-    the labeler adds no values; it is the boundary where what came from outside is checked
-    against the declaration before it reaches the store.
+    The main path: whoever produced the corpus knows the attributes and delivers them, so
+    this adds no values — it is the boundary where what came from outside is checked.
     """
 
     def _attributes(self, document: Document) -> Mapping[str, object]:
@@ -68,11 +58,9 @@ class PropagatingLabeler(BaseLabeler):
 class ManifestLabeler(BaseLabeler):
     """Reads the attributes from a JSON manifest keyed by ``source.id``.
 
-    For the corpus with no producer upstream — a folder of documents someone curates by
-    hand. ``default`` applies to every document, ``sources`` overrides it per document, so
-    nothing has to be enumerated in advance: what a new document inherits is the default,
-    and if that doesn't carry the required attributes it is denied at retrieval rather than
-    quietly readable.
+    For a corpus with no producer upstream, curated by hand. ``default`` applies to every
+    document and ``sources`` overrides it per document, so nothing has to be enumerated in
+    advance.
 
     ``{"default": {"tenant": "acme"}, "sources": {"report.pdf": {"classification": "…"}}}``
     """
@@ -95,10 +83,8 @@ class ManifestLabeler(BaseLabeler):
 class StaticLabeler(BaseLabeler):
     """Puts the same attributes on everything this pipeline ingests.
 
-    The degenerate case, and a common one: an ``IngestionPipeline`` has a single loader, so
-    a deployment whose whole corpus shares its attributes ("everything here is this
-    tenant") needs nothing more. Several sources means several pipelines, each with its own
-    labeler — the pairing is done where they are composed, not looked up in a table.
+    An ``IngestionPipeline`` has a single loader, so a corpus that shares its attributes
+    needs nothing more. Several sources means several pipelines, each with its own labeler.
     """
 
     def __init__(self, schema: AccessSchema, attributes: Mapping[str, object]) -> None:

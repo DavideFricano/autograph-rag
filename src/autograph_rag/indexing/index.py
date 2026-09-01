@@ -11,21 +11,13 @@ from autograph_rag.types import Chunk, ScoredChunk
 class BaseIndex(ABC):
     """A retrieval index over chunks: insert, delete, retrieve.
 
-    Keeps only ids plus its own representation (dense vectors, sparse/BM25 terms, …)
-    and resolves chunk data back from a **shared** ``Store`` on retrieve, so retrieve
-    returns ``list[ScoredChunk]``. Because the store is shared (single source of truth,
-    no duplication), an index **never writes it**: adding and deleting *records* is
-    coordinated by the ingestion pipeline (``store.add`` / ``store.delete`` once), while
-    each index manages only its own ids — ``delete`` here removes this index's ids, not
-    the shared records (a cascade from one index would strand the others). The pipeline
-    does the fan-out: ``delete`` on every index, then a single ``store.delete``.
+    Keeps only ids plus its own representation (dense vectors, sparse/BM25 terms, …) and
+    resolves chunk data back from a **shared** ``Store``, which it **never writes**: the
+    ingestion pipeline adds and deletes the records once, while each index manages only
+    its own ids. Carries no backend import.
 
-    Stays free of any backend import, so the similarity family and the relation family
-    inherit nothing engine-specific from here.
-
-    An optional ``schema`` says whether this deployment does ABAC at all. Without one the
-    index behaves as it always has: a filter is accepted if given, and omitting it returns
-    everything. With one, retrieval without a filter is refused — see ``retrieve``.
+    An optional ``schema`` says whether this deployment does ABAC at all — without one a
+    filter is merely accepted if given; with one it is mandatory. See ``retrieve``.
     """
 
     def __init__(self, store: BaseStore, schema: AccessSchema | None = None) -> None:
@@ -53,19 +45,12 @@ class BaseIndex(ABC):
     ) -> list[ScoredChunk]:
         """Retrieve the authorized top ``top_i``, resolving chunks through the shared store.
 
-        The filter is applied here, before fusion: a ranker reads positions and score
-        spreads *within* each list, so leaving unauthorized chunks in would let them shift
-        the rank of authorized ones. Applying it here also keeps ``top_k`` meaning
-        authorized results. Subclasses may additionally push the filter into their backend
-        — this check stays regardless, so an index that ignores or mistranslates it cannot
-        leak, only return less.
-
-        When the deployment declared a schema, omitting the filter is refused rather than
-        read as "everything": there the safe default cannot be inferred, and forgetting an
-        argument must not be spelled the same way as deciding there is no restriction —
-        which is what ``Allow()`` is for. A chunk that doesn't carry the required
-        attributes is dropped before the predicate runs, so an unlabeled chunk stays denied
-        even under a predicate a missing attribute would otherwise satisfy (``Not``).
+        The filter is applied here, before fusion, because a ranker reads positions and
+        score spreads within each list. A subclass may also push it into its backend; this
+        check stays regardless, so an index that mistranslates it returns less rather than
+        leaking. A chunk missing the schema's required attributes is dropped before the
+        predicate runs. With a schema declared, omitting the filter raises — ``Allow()``
+        is how a call states it has no restriction.
         """
         if self.schema is not None:
             if filter is None:

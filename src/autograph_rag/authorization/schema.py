@@ -48,14 +48,11 @@ class Attribute(BaseModel):
 class AccessSchema:
     """The closed vocabulary of access attributes a deployment declares.
 
-    One declaration, three consumers: it validates what the labeler writes at ingestion,
-    tells each index which payload fields to index, and rejects a filter naming an
-    attribute nobody declared — so an undeclared attribute has no silent path through.
-
-    Whether one exists is also what tells a deployment apart: no schema means no ABAC (no
-    labeling, no filtering, everything retrievable), a schema means the labeler must write
-    conforming attributes and every retrieval must carry a filter. Which is why an empty
-    vocabulary is refused: it would claim ABAC while making every filter invalid.
+    One declaration, three consumers: it validates what the labeler writes, tells each
+    index which payload fields to index, and rejects a filter naming an attribute nobody
+    declared. Whether one exists is what tells a deployment apart — no schema means no
+    ABAC at all; a schema makes labeling and filtering mandatory. An empty vocabulary is
+    refused.
     """
 
     def __init__(self, attributes: Sequence[Attribute]) -> None:
@@ -70,10 +67,8 @@ class AccessSchema:
     def from_file(cls, path: Path | str) -> AccessSchema:
         """Load the declaration from a JSON list of attributes.
 
-        Ingestion and query are separate pipelines and may run as separate processes, so
-        the two ends cannot share one object: what makes the contract hold is that both
-        read *the same declaration*. Keeping it a file — versioned, reviewed like code —
-        is what turns that from a coincidence into something checkable.
+        A file rather than an object because ingestion and query may run as separate
+        processes, and both must read the same declaration.
         """
         declared = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(declared, list):
@@ -83,11 +78,9 @@ class AccessSchema:
     def is_labeled(self, access: Mapping[str, object]) -> bool:
         """Whether these access attributes carry every attribute the schema requires.
 
-        Separate from ``evaluate`` on purpose: it makes default-deny a property of the
-        enforcement point rather than of how the policy happens to be written. Under a
-        bare ``Not(Match(...))`` a missing attribute *satisfies* the predicate, so an
-        unlabeled chunk would pass — checking this first closes that door for every
-        predicate, without the algebra having to know about labeling.
+        Checked before the predicate at retrieval, so an unlabeled chunk is denied whatever
+        the predicate says — under a bare ``Not`` a missing attribute would satisfy it.
+        The read-side twin of ``validate_access``, which raises instead.
         """
         return all(attribute.name in access for attribute in self.attributes if attribute.required)
 
@@ -102,15 +95,9 @@ class AccessSchema:
     ) -> dict[str, AttributeValue | list[AttributeValue]]:
         """Checks what the labeler wrote, before it reaches the store and the payloads.
 
-        Validates what is there *and* what is missing. Without the second half the
-        ingestion would accept a document it already knows can never be retrieved — the
-        required attributes absent means every filter denies it — and the symptom would
-        surface much later, at query time, as an empty result indistinguishable from a
-        legitimate deny. Refusing here is the same call already made for an undeclared
-        attribute: it means the producer and the declaration disagree.
-
-        ``is_labeled`` answers the same question without raising, because at retrieval an
-        unlabeled chunk must be denied quietly rather than break the query.
+        Raises on what is wrong *and* on what is missing: without the required attributes
+        a document could never be retrieved, so accepting it would only defer the symptom
+        to query time as an empty result.
         """
         validated: dict[str, AttributeValue | list[AttributeValue]] = {}
         for name, value in access.items():

@@ -8,7 +8,7 @@ from autograph_rag.generation.llm import OllamaClient
 from autograph_rag.indexing.similarity.lexical_index import VolatileLexicalIndex
 from autograph_rag.indexing.similarity.semantic_index import VolatileSemanticIndex
 from autograph_rag.ingestion.chunker import HierarchicalChunker
-from autograph_rag.ingestion.labeler import PropagatingLabeler
+from autograph_rag.ingestion.labeler import ManifestLabeler, PropagatingLabeler
 from autograph_rag.ingestion.loader import FileLoader
 from autograph_rag.pipeline import RagPipeline
 from autograph_rag.ranking.fusion_ranker import ReciprocalRankFusionRanker
@@ -28,12 +28,18 @@ if __name__ == "__main__":
     path = settings.access_schema_path
     schema = AccessSchema.from_file(path) if path is not None else None
 
+    # No schema means no ABAC. With one, the attributes either arrive with the documents
+    # (a gateway, a producer upstream) or are curated locally in a manifest.
+    if schema is None:
+        labeler = None
+    elif settings.access_manifest_path is not None:
+        labeler = ManifestLabeler(schema, settings.access_manifest_path)
+    else:
+        labeler = PropagatingLabeler(schema)
+
     rag = RagPipeline(
         loader=FileLoader(settings.in_dir, settings.out_dir, save_output=True),
-        # Validates what arrived with each document. Nothing puts attributes on a local
-        # file yet, so with a schema declared every chunk is unlabeled — and therefore
-        # denied. Swap in a ManifestLabeler to curate them by hand.
-        labeler=PropagatingLabeler(schema) if schema is not None else None,
+        labeler=labeler,
         chunker=HierarchicalChunker(),
         store=store,
         indexes=[

@@ -77,7 +77,7 @@ class PersistentSemanticIndex(SemanticIndex):
         self,
         store: BaseStore,
         embedder: BaseEmbedder,
-        path: str = "./data/qdrant/semantic",
+        path: str = "./data/db/semantic",
         collection: str = "semantic",
         schema: AccessSchema | None = None,
     ) -> None:

@@ -39,3 +39,7 @@ class Settings(BaseSettings):
     # Authorization: the declared access schema. Unset means this deployment does no
     # ABAC — nothing labels, nothing filters, retrieval returns everything.
     access_schema_path: Path | None = None
+
+    # Where the access attributes of local documents are curated, for a corpus with no
+    # producer upstream. Unset means they are expected to arrive with the documents.
+    access_manifest_path: Path | None = None
