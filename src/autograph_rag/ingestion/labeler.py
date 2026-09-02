@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from autograph_rag.authorization.schema import AccessSchema
+from autograph_rag.errors import ConformanceError, DeclarationError
 from autograph_rag.types import Document
 
 
@@ -36,9 +37,9 @@ class BaseLabeler(ABC):
         """
         try:
             access = self.schema.validate_access(self._attributes(document))
-        except ValueError as error:
+        except ConformanceError as error:
             # the schema knows the vocabulary, only this side knows which document
-            raise ValueError(f"document {document.source.id!r}: {error}") from error
+            raise ConformanceError(f"document {document.source.id!r}: {error}") from error
         return document.model_copy(
             update={"source": document.source.model_copy(update={"access": access})}
         )
@@ -69,10 +70,10 @@ class ManifestLabeler(BaseLabeler):
         super().__init__(schema)
         manifest = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
-            raise ValueError(f"the access manifest must be a JSON object: {path}")
+            raise DeclarationError(f"the access manifest must be a JSON object: {path}")
         unknown = set(manifest) - {"default", "sources"}
         if unknown:
-            raise ValueError(f"unknown key in the access manifest: {sorted(unknown)}")
+            raise DeclarationError(f"unknown key in the access manifest: {sorted(unknown)}")
         self.default: dict = manifest.get("default", {})
         self.sources: dict = manifest.get("sources", {})
 

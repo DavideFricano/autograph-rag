@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from autograph_rag.authorization.filter import Allow, And, Filter, Match, Not, Or
+from autograph_rag.errors import ConformanceError, DeclarationError
 from autograph_rag.types import AttributeValue
 
 
@@ -60,14 +61,14 @@ class AccessSchema:
         self.attributes = tuple(attributes)
         self._by_name = {attribute.name: attribute for attribute in self.attributes}
         if not self.attributes:
-            raise ValueError("the access schema declares no attribute")
+            raise DeclarationError("the access schema declares no attribute")
         if not any(attribute.required for attribute in self.attributes):
-            raise ValueError(
+            raise DeclarationError(
                 "no attribute is required: nothing would then oblige a chunk to carry any, "
                 "and an unlabelled one would satisfy a negated predicate"
             )
         if len(self._by_name) != len(self.attributes):
-            raise ValueError("duplicate attribute name in the access schema")
+            raise DeclarationError("duplicate attribute name in the access schema")
 
     @classmethod
     def from_file(cls, path: Path | str) -> AccessSchema:
@@ -78,7 +79,7 @@ class AccessSchema:
         """
         declared = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(declared, list):
-            raise ValueError(f"the access schema must be a JSON list of attributes: {path}")
+            raise DeclarationError(f"the access schema must be a JSON list of attributes: {path}")
         return cls([Attribute.model_validate(item) for item in declared])
 
     def is_labeled(self, access: Mapping[str, object]) -> bool:
@@ -93,7 +94,7 @@ class AccessSchema:
     def attribute(self, name: str) -> Attribute:
         """The declared attribute under ``name``; an undeclared name never passes."""
         if name not in self._by_name:
-            raise ValueError(f"undeclared access attribute: {name!r}")
+            raise ConformanceError(f"undeclared access attribute: {name!r}")
         return self._by_name[name]
 
     def validate_access(
@@ -110,13 +111,13 @@ class AccessSchema:
             attribute = self.attribute(name)
             if attribute.multi:
                 if isinstance(value, str | bytes) or not isinstance(value, Iterable):
-                    raise ValueError(f"attribute {name!r} is multi-valued: expected a collection")
+                    raise ConformanceError(f"attribute {name!r} is multi-valued: expected a collection")
                 validated[name] = [self._checked(attribute, item) for item in value]
             else:
                 validated[name] = self._checked(attribute, value)
         if not self.is_labeled(validated):
             missing = [a.name for a in self.attributes if a.required and a.name not in validated]
-            raise ValueError(f"missing required access attributes: {missing}")
+            raise ConformanceError(f"missing required access attributes: {missing}")
         return validated
 
     def validate_filter(self, predicate: Filter) -> None:
@@ -134,7 +135,7 @@ class AccessSchema:
             case Allow():
                 pass  # no attribute to check: the constant carries no vocabulary
             case _:
-                raise ValueError(f"unsupported filter node: {type(predicate).__name__}")
+                raise ConformanceError(f"unsupported filter node: {type(predicate).__name__}")
 
     def _checked(self, attribute: Attribute, value: object) -> AttributeValue:
         # bool is an int subclass, so it needs a check of its own in both directions
@@ -142,7 +143,7 @@ class AccessSchema:
         if isinstance(value, bool) is not expected_bool or not isinstance(
             value, _PYTHON_TYPE[attribute.type]
         ):
-            raise ValueError(
+            raise ConformanceError(
                 f"attribute {attribute.name!r} expects {attribute.type}, got {value!r}"
             )
         return value

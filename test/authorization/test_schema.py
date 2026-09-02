@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from autograph_rag.authorization.filter import Allow, And, Match, Not, Or
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
+from autograph_rag.errors import ConformanceError, DeclarationError
 
 
 def _schema() -> AccessSchema:
@@ -59,7 +60,7 @@ def test_attributes_are_not_required_unless_declared_so():
 
 def test_a_declaration_that_is_not_a_list_is_refused(tmp_path):
     path = _write(tmp_path, '{ "attributes": [{ "name": "tenant", "type": "keyword" }] }')
-    with pytest.raises(ValueError, match="JSON list"):
+    with pytest.raises(DeclarationError, match="JSON list"):
         AccessSchema.from_file(path)
 
 
@@ -75,14 +76,14 @@ def test_a_vocabulary_that_requires_nothing_is_refused():
     """The same half-configuration in another guise: with no required attribute nothing
     obliges a chunk to carry any, so ``is_labeled`` always passes and a bare negation lets
     an unlabelled chunk through — a schema that looks like access control and isn't."""
-    with pytest.raises(ValueError, match="no attribute is required"):
+    with pytest.raises(DeclarationError, match="no attribute is required"):
         AccessSchema([Attribute(name="tenant", type=AttributeType.KEYWORD)])
 
 
 def test_an_empty_vocabulary_is_refused():
     """It would claim the deployment does ABAC — filter mandatory — while making every
     filter invalid, since no attribute name would be declared."""
-    with pytest.raises(ValueError, match="no attribute"):
+    with pytest.raises(DeclarationError, match="no attribute"):
         AccessSchema([])
 
 
@@ -109,9 +110,9 @@ def test_validate_access_refuses_what_is_missing_not_only_what_is_wrong():
         ]
     )
     assert schema.validate_access({"tenant": "acme"}) == {"tenant": "acme"}
-    with pytest.raises(ValueError, match=r"missing required.*tenant"):
+    with pytest.raises(ConformanceError, match=r"missing required.*tenant"):
         schema.validate_access({"classification": "public"})
-    with pytest.raises(ValueError, match="missing required"):
+    with pytest.raises(ConformanceError, match="missing required"):
         schema.validate_access({})
 
 
@@ -123,7 +124,7 @@ def test_validate_filter_accepts_the_constant():
 
 
 def test_duplicate_declaration_is_refused():
-    with pytest.raises(ValueError):
+    with pytest.raises(DeclarationError):
         AccessSchema(
             [
                 Attribute(name="tenant", type=AttributeType.KEYWORD),
@@ -147,31 +148,31 @@ def test_validate_access_accepts_declared_attributes():
 
 def test_validate_access_rejects_undeclared_attribute():
     """A typo must fail at ingestion, not become an attribute nothing ever filters on."""
-    with pytest.raises(ValueError, match="undeclared"):
+    with pytest.raises(ConformanceError, match="undeclared"):
         _schema().validate_access({"tenat": "acme"})
 
 
 def test_validate_access_rejects_wrong_type():
-    with pytest.raises(ValueError, match="expects"):
+    with pytest.raises(ConformanceError, match="expects"):
         _schema().validate_access({"retention_years": "ten"})
 
 
 def test_bool_and_int_are_not_interchangeable():
     """bool subclasses int in Python, so without an explicit check 0 would pass as a
     boolean and True as an integer."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ConformanceError):
         _schema().validate_access({"exportable": 0})
-    with pytest.raises(ValueError):
+    with pytest.raises(ConformanceError):
         _schema().validate_access({"retention_years": True})
 
 
 def test_multi_valued_attribute_wants_a_collection():
-    with pytest.raises(ValueError, match="multi-valued"):
+    with pytest.raises(ConformanceError, match="multi-valued"):
         _schema().validate_access({"care_team": "cardiology"})
 
 
 def test_single_valued_attribute_refuses_a_collection():
-    with pytest.raises(ValueError, match="expects"):
+    with pytest.raises(ConformanceError, match="expects"):
         _schema().validate_access({"tenant": ["acme", "globex"]})
 
 
@@ -185,7 +186,7 @@ def test_validate_filter_walks_the_whole_tree():
             Not(clause=Match(attribute="undeclared", values={"x"})),
         ]),
     ])
-    with pytest.raises(ValueError, match="undeclared"):
+    with pytest.raises(ConformanceError, match="undeclared"):
         _schema().validate_filter(predicate)
 
 
@@ -198,5 +199,5 @@ def test_validate_filter_accepts_a_well_formed_predicate():
 
 
 def test_validate_filter_checks_value_types_too():
-    with pytest.raises(ValueError, match="expects"):
+    with pytest.raises(ConformanceError, match="expects"):
         _schema().validate_filter(Match(attribute="retention_years", values={"ten"}))

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 from autograph_rag.authorization.filter import Filter, evaluate
 from autograph_rag.authorization.schema import AccessSchema
+from autograph_rag.errors import EnforcementError
 from autograph_rag.storing.store import BaseStore
 from autograph_rag.types import Chunk, ScoredChunk
 
@@ -60,13 +61,13 @@ class BaseIndex(ABC):
         """
         if self.schema is None:
             if filter is not None:
-                raise ValueError(
+                raise EnforcementError(
                     "filtering needs the AccessSchema this index was not given: without a "
                     "declared vocabulary the predicate cannot be validated and the required "
                     "attributes are unknown, so an unlabelled chunk would satisfy a negation"
                 )
         elif filter is None:
-            raise ValueError(
+            raise EnforcementError(
                 "this index declares an access schema, so retrieve requires a filter; "
                 "pass Allow() to state explicitly that the call has no restriction"
             )
@@ -79,7 +80,7 @@ class BaseIndex(ABC):
         ]
         if filter is None:
             if any(sc.chunk.metadata.source.access for sc in results):
-                raise ValueError(
+                raise EnforcementError(
                     "these chunks carry access attributes but this index enforces nothing: "
                     "give it the AccessSchema they were labelled against"
                 )

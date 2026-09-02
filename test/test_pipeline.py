@@ -21,6 +21,7 @@ from autograph_rag.augmentation.augmenter import PromptAugmenter
 from autograph_rag.authorization.filter import Match
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 from autograph_rag.embedding.embedder import BaseEmbedder
+from autograph_rag.errors import EnforcementError
 from autograph_rag.generation.llm import BaseLLMClient
 from autograph_rag.indexing.similarity.lexical_index import VolatileLexicalIndex
 from autograph_rag.indexing.similarity.semantic_index import VolatileSemanticIndex
@@ -297,7 +298,7 @@ def test_querying_an_abac_pipeline_without_a_filter_is_refused():
     rag = _abac_pipeline(StaticLabeler(_ABAC_SCHEMA, {"tenant": "acme"}))
     rag.ingest_pipeline.ingest()
 
-    with pytest.raises(ValueError, match="requires a filter"):
+    with pytest.raises(EnforcementError, match="requires a filter"):
         rag.query_pipeline.retrieve("febbre")
 
 

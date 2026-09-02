@@ -11,6 +11,7 @@ from autograph_rag.authorization.filter import (
     Or,
     evaluate,
 )
+from autograph_rag.errors import ConformanceError
 
 
 def test_nested_clauses_keep_their_concrete_type():
@@ -135,7 +136,7 @@ def test_unknown_node_raises_instead_of_defaulting():
     class _Unhandled(Filter):
         pass
 
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ConformanceError, match="unsupported"):
         evaluate(_Unhandled(), {"tenant": "acme"})
 
 

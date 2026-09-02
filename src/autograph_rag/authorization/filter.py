@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from autograph_rag.errors import ConformanceError
 from autograph_rag.types import AttributeValue
 
 
@@ -105,4 +106,4 @@ def evaluate(
         case Allow():
             return True
         case _:
-            raise ValueError(f"unsupported filter node: {type(predicate).__name__}")
+            raise ConformanceError(f"unsupported filter node: {type(predicate).__name__}")

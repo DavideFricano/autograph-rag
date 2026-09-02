@@ -12,6 +12,8 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import ContentLayer
 from markitdown import MarkItDown
 
+from autograph_rag.errors import ConversionError
+
 
 class Parser(StrEnum):
     """Closed set of parsing strategies a media type can be routed to."""
@@ -91,7 +93,7 @@ class MarkdownConverter(BaseConverter):
             case Parser.TEXT:
                 return data.decode("utf-8")
             case _:
-                raise ValueError(f"Unsupported media type: {media_type}")
+                raise ConversionError(f"Unsupported media type: {media_type}")
 
     def convert_file(self, path: Path) -> str:
         media_type = MEDIA_TYPE_BY_EXTENSION.get(path.suffix.lower())
@@ -104,4 +106,4 @@ class MarkdownConverter(BaseConverter):
             case Parser.TEXT:
                 return path.read_text(encoding="utf-8")
             case _:
-                raise ValueError(f"Unsupported file extension: {path.name}")
+                raise ConversionError(f"Unsupported file extension: {path.name}")

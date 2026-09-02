@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from autograph_rag.errors import ConversionError
 from autograph_rag.ingestion.converter import (
     BaseConverter,
     MarkdownConverter,
@@ -28,7 +29,7 @@ def test_csv_is_converted_to_a_markdown_table():
 
 
 def test_unknown_media_type_fails_loud():
-    with pytest.raises(ValueError):
+    with pytest.raises(ConversionError):
         MarkdownConverter().convert_stream(b"x", "application/octet-stream")
 
 
@@ -41,5 +42,5 @@ def test_convert_file_resolves_extension_case_insensitive(tmp_path):
 
 
 def test_convert_file_unknown_extension_fails_loud():
-    with pytest.raises(ValueError):
+    with pytest.raises(ConversionError):
         MarkdownConverter().convert_file(Path("mystery.zzz"))

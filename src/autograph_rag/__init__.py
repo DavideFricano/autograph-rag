@@ -13,6 +13,14 @@ from autograph_rag.authorization.filter import (
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
 from autograph_rag.config import Settings
 from autograph_rag.embedding.embedder import BaseEmbedder, LocalEmbedder, OpenAIEmbedder
+from autograph_rag.errors import (
+    AuthorizationError,
+    ConformanceError,
+    ConversionError,
+    DeclarationError,
+    EnforcementError,
+    RagError,
+)
 from autograph_rag.generation.llm import BaseLLMClient, OllamaClient, OpenAIClient
 from autograph_rag.indexing.index import BaseIndex
 from autograph_rag.indexing.similarity.lexical_index import (
@@ -80,6 +88,7 @@ __all__ = [
     "ApiLoader",
     "Attribute",
     "AttributeType",
+    "AuthorizationError",
     "BaseAugmenter",
     "BaseChunker",
     "BaseConverter",
@@ -93,9 +102,13 @@ __all__ = [
     "Chunk",
     "Clause",
     "Cleaner",
+    "ConformanceError",
+    "ConversionError",
     "CrossReranker",
+    "DeclarationError",
     "DistributionScoreFusionRanker",
     "Document",
+    "EnforcementError",
     "FileLoader",
     "Filter",
     "FilterAdapter",
@@ -124,6 +137,7 @@ __all__ = [
     "PromptAugmenter",
     "PropagatingLabeler",
     "QueryPipeline",
+    "RagError",
     "RagPipeline",
     "ReciprocalRankFusionRanker",
     "RecursiveCharacterChunker",

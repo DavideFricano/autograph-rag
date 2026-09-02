@@ -10,6 +10,7 @@ from datetime import date
 import pytest
 
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
+from autograph_rag.errors import ConformanceError, DeclarationError
 from autograph_rag.ingestion.chunker import FixedSizeChunker
 from autograph_rag.ingestion.labeler import ManifestLabeler, PropagatingLabeler, StaticLabeler
 from autograph_rag.types import Document, Origin, Source
@@ -49,13 +50,13 @@ def test_an_undeclared_attribute_stops_the_ingestion():
     and the declaration disagree, which concerns the whole corpus and not this document.
     Skipping would leave a silent hole in it."""
     labeler = PropagatingLabeler(_SCHEMA)
-    with pytest.raises(ValueError, match="undeclared access attribute"):
+    with pytest.raises(ConformanceError, match="undeclared access attribute"):
         labeler.label(_document(access={"departement": "cardio"}))
 
 
 def test_a_wrongly_typed_value_stops_the_ingestion():
     labeler = PropagatingLabeler(_SCHEMA)
-    with pytest.raises(ValueError, match="retention_years"):
+    with pytest.raises(ConformanceError, match="retention_years"):
         labeler.label(_document(access={"tenant": "acme", "retention_years": "dieci"}))
 
 
@@ -73,7 +74,7 @@ def test_static_puts_the_same_attributes_on_every_document():
 
 
 def test_static_validates_too():
-    with pytest.raises(ValueError, match="undeclared access attribute"):
+    with pytest.raises(ConformanceError, match="undeclared access attribute"):
         StaticLabeler(_SCHEMA, {"nope": "x"}).label(_document())
 
 
@@ -112,18 +113,18 @@ def test_a_document_the_default_does_not_cover_stops_the_ingestion(tmp_path):
     result is indistinguishable from a legitimate deny — so it is refused here, naming the
     document, which is the one thing the schema cannot know."""
     path = _manifest(tmp_path, '{ "sources": { "referto.pdf": { "tenant": "acme" } } }')
-    with pytest.raises(ValueError, match="nuovo.pdf"):
+    with pytest.raises(ConformanceError, match="nuovo.pdf"):
         ManifestLabeler(_SCHEMA, path).label(_document("nuovo.pdf"))
 
 
 def test_an_unknown_key_in_the_manifest_is_refused(tmp_path):
     path = _manifest(tmp_path, '{ "defaults": { "tenant": "acme" } }')
-    with pytest.raises(ValueError, match="unknown key"):
+    with pytest.raises(DeclarationError, match="unknown key"):
         ManifestLabeler(_SCHEMA, path)
 
 
 def test_a_manifest_that_is_not_an_object_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="JSON object"):
+    with pytest.raises(DeclarationError, match="JSON object"):
         ManifestLabeler(_SCHEMA, _manifest(tmp_path, '[{ "tenant": "acme" }]'))
 
 
@@ -139,7 +140,7 @@ def test_every_chunk_of_the_document_inherits_the_attributes():
 
 
 def test_a_multi_valued_attribute_must_arrive_as_a_collection():
-    with pytest.raises(ValueError, match="care_team"):
+    with pytest.raises(ConformanceError, match="care_team"):
         PropagatingLabeler(_SCHEMA).label(
             _document(access={"tenant": "acme", "care_team": "icu"})
         )

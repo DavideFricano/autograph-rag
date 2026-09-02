@@ -14,6 +14,7 @@ import pytest
 
 from autograph_rag.authorization.filter import Allow, And, Match, Not
 from autograph_rag.authorization.schema import AccessSchema, Attribute, AttributeType
+from autograph_rag.errors import ConformanceError, EnforcementError
 from autograph_rag.indexing.index import BaseIndex
 from autograph_rag.storing.store import VolatileStore
 from autograph_rag.types import Chunk, Metadata, Origin, Source
@@ -69,8 +70,6 @@ def _wired(
     store = VolatileStore()
     store.add(chunks)
     return _FakeIndex(store, hits, schema)
-
-
 
 
 def test_unauthorized_chunks_are_dropped():
@@ -148,16 +147,15 @@ def test_denying_everything_returns_an_empty_list():
 
 
 def test_labelled_chunks_read_by_an_index_that_enforces_nothing_are_refused():
-    """The one configuration that fails open: someone labelled the data and this index was
-    wired without the schema, so an unfiltered read hands back every tenant at once. Only
-    the unfiltered read is refused — filtering without a declared schema stays allowed,
-    since there the attributes are being honoured (see the tests above)."""
+    """Someone labelled the data and this index was wired without the schema, so the read
+    would hand back every tenant at once. The other direction is refused too, one test
+    below: schema and filter go together."""
     index = _wired(
         [_chunk("c0", {"tenant": "acme"}), _chunk("c1", {"tenant": "globex"})],
         [("c0", 0.9), ("c1", 0.8)],
         schema=None,
     )
-    with pytest.raises(ValueError, match="enforces nothing"):
+    with pytest.raises(EnforcementError, match="enforces nothing"):
         index.retrieve("q", top_i=10)
 
 
@@ -166,7 +164,7 @@ def test_filtering_without_a_declared_schema_is_refused():
     there is no notion of a required attribute, so a bare negation would admit a chunk
     nobody labelled — a filter that quietly guarantees less than it looks like it does."""
     index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)], schema=None)
-    with pytest.raises(ValueError, match="filtering needs the AccessSchema"):
+    with pytest.raises(EnforcementError, match="filtering needs the AccessSchema"):
         index.retrieve("q", top_i=10, filter=_ACME)
 
 
@@ -181,13 +179,13 @@ def test_with_a_schema_omitting_the_filter_is_refused():
     """The safe default cannot be inferred here, and forgetting an argument must not be
     spelled the same way as deciding there is no restriction."""
     index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)], _SCHEMA)
-    with pytest.raises(ValueError, match="requires a filter"):
+    with pytest.raises(EnforcementError, match="requires a filter"):
         index.retrieve("q", top_i=10)
 
 
 def test_the_refusal_happens_before_the_backend_is_queried():
     index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)], _SCHEMA)
-    with pytest.raises(ValueError):
+    with pytest.raises(EnforcementError):
         index.retrieve("q", top_i=10)
     assert index.searched_top_i is None
 
@@ -220,7 +218,7 @@ def test_a_filter_naming_an_undeclared_attribute_is_refused():
     """It would match nothing and return an empty list, which reads like 'you have no
     access' instead of 'this filter is wrong'. The vocabulary makes it loud."""
     index = _wired([_chunk("c0", {"tenant": "acme"})], [("c0", 0.9)], _SCHEMA)
-    with pytest.raises(ValueError, match="undeclared access attribute"):
+    with pytest.raises(ConformanceError, match="undeclared access attribute"):
         index.retrieve("q", top_i=10, filter=Match(attribute="departement", values={"x"}))
 
 
